@@ -4,3 +4,6 @@ tchap/graft/
 
 # données locales Synapse (jamais versionnées)
 synapse-data/
+
+# secrets locaux : seuls les .env.example sont versionnés
+stack/env/*.env

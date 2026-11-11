@@ -1,0 +1,158 @@
+# IA locale de StartKit : les modèles tournent dans Ollama, sur cette machine.
+# Aucune donnée n'est envoyée à un service externe.
+#
+# Ollama écoute seulement sur 127.0.0.1:11434 (inaccessible aux conteneurs).
+# ollama-relay le rend joignable depuis les conteneurs, et uniquement depuis
+# eux : il écoute sur l'adresse du pont Docker (172.17.0.1), pas sur le réseau
+# local. Les services l'appellent via http://host.docker.internal:11434/v1
+# (API compatible OpenAI) avec `extra_hosts: host.docker.internal:host-gateway`.
+#
+# ---------------------------------------------------------------------------
+# La Suite Conversations (« Assistant ») — http://assistant.localhost:8000
+#
+# Images officielles v0.0.28 (lasuite/conversations-backend, -frontend), d'après
+# compose.yml, docs/ et le chart helm du dépôt suitenumerique/conversations.
+# Routage dans stack/caddy/apps/conversations.caddy (reproduit les ingress helm) :
+#   /api (réponses SSE non tamponnées), /admin, /static -> conversations-backend:8000
+#   /media/ -> autorisation par le backend (media-auth) puis s3:9000/conversations-storage
+#   le reste -> conversations-frontend:8080 (SPA Vite servie par nginx)
+#
+# Modèles : stack/conversations/llm-configuration.json (monté en lecture seule),
+# qwen2.5:1.5b par défaut, mistral:latest au choix dans le sélecteur de modèle.
+# Variables : stack/env/conversations.env. Chemins relatifs à ce fichier (stack/apps/).
+#
+# Au premier `docker compose up -d`, conversations-migrate passe avant les autres :
+# migrations Django + super-utilisateur admin@startkit.localhost / admin.
+# Idempotent, rejoué à chaque `up` (c'est aussi la procédure de mise à jour).
+#
+# Non lancés / désactivés : celery beat (ses deux tâches périodiques ne servent
+# qu'avec Albert), recherche web, envoi de documents (RAG Albert), génération de
+# présentations, connecteur data.gouv (MCP), « Éditer dans Docs », Albert,
+# Langfuse, Posthog, Sentry, Brevo.
+
+x-conversations-backend: &conversations-backend
+  image: lasuite/conversations-backend:v0.0.28
+  env_file: ../env/conversations.env
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - ../conversations/llm-configuration.json:/startkit/llm-configuration.json:ro
+  configs:
+    - source: conversations-settings-http
+      target: /app/conversations/settings_http.py
+
+services:
+  ollama-relay:
+    image: alpine/socat:1.8.0.3
+    network_mode: host
+    command: TCP-LISTEN:11434,bind=172.17.0.1,fork,reuseaddr TCP:127.0.0.1:11434
+    restart: unless-stopped
+
+  # Migrations + super-utilisateur Django (commande createsuperuser de l'app demo,
+  # idempotente : crée ou met à jour), puis s'arrête.
+  conversations-migrate:
+    <<: *conversations-backend
+    command:
+      - sh
+      - -c
+      - >
+        python manage.py migrate --no-input &&
+        python manage.py createsuperuser --email "$$DJANGO_SUPERUSER_EMAIL" --password "$$DJANGO_SUPERUSER_PASSWORD"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  # API Django en ASGI : commande de l'image (uvicorn, PYTHON_SERVER_MODE=async posé
+  # par conversations.asgi, indispensable au streaming SSE), WEB_CONCURRENCY=1 dans
+  # conversations.env (un processus asynchrone suffit en local).
+  conversations-backend:
+    <<: *conversations-backend
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      conversations-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      ollama-relay:
+        condition: service_started
+    restart: unless-stopped
+
+  # Celery : résumé de l'historique quand une conversation dépasse la fenêtre de
+  # contexte (le tour de chat attend ce résumé), plus l'indexation de documents si
+  # on l'active un jour. Même commande que le worker du chart helm, concurrence 1.
+  conversations-worker:
+    <<: *conversations-backend
+    command:
+      - celery
+      - -A
+      - conversations.celery_app
+      - worker
+      - -l
+      - INFO
+      - --concurrency=1
+    depends_on:
+      conversations-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      ollama-relay:
+        condition: service_started
+    restart: unless-stopped
+
+  # Interface (SPA Vite servie par le nginx non privilégié de l'image sur :8080).
+  # Sans VITE_API_ORIGIN au build, elle appelle l'API sur sa propre origine.
+  conversations-frontend:
+    image: lasuite/conversations-frontend:v0.0.28
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      conversations-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+configs:
+  # Classe de configuration Django "Http" : Production sans HTTPS.
+  # Production force en dur SECURE_SSL_REDIRECT, SECURE_PROXY_SSL_HEADER et les
+  # cookies Secure ; Development, lui, charge django_extensions, absent de l'image.
+  # Activée par DJANGO_SETTINGS_MODULE=conversations.settings_http et
+  # DJANGO_CONFIGURATION=Http (conversations.env).
+  conversations-settings-http:
+    content: |
+      """Conversations en HTTP simple pour la stack locale : Production sans HTTPS."""
+
+      from conversations.settings import Production
+
+
+      class Http(Production):
+          """Production settings served over plain HTTP (local stack only)."""
+
+          SECURE_SSL_REDIRECT = False
+          SECURE_PROXY_SSL_HEADER = None
+          SECURE_HSTS_SECONDS = 0
+          SECURE_HSTS_PRELOAD = False
+          SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+          SESSION_COOKIE_SECURE = False
+          CSRF_COOKIE_SECURE = False
+          SESSION_COOKIE_NAME = "conversations_sessionid"

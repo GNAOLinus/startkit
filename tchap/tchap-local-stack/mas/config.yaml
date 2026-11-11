@@ -1,0 +1,132 @@
+http:
+  listeners:
+  - name: web
+    resources:
+    - name: discovery
+    - name: human
+    - name: oauth
+    - name: compat
+    - name: graphql
+    - name: assets
+    binds:
+    - address: '[::]:8084'
+    proxy_protocol: false
+  - name: internal
+    resources:
+    - name: health
+    binds:
+    - host: localhost
+      port: 8085
+    proxy_protocol: false
+  trusted_proxies:
+  - 192.168.0.0/16
+  - 172.16.0.0/12
+  - 10.0.0.0/10
+  - 127.0.0.1/8
+  - fd00::/8
+  - ::1/128
+  public_base: http://localhost:8084/
+  issuer: http://localhost:8084/
+database:
+  uri: postgresql://mas:maspassword@localhost:5434/mas
+  max_connections: 10
+  min_connections: 0
+  connect_timeout: 30
+  idle_timeout: 600
+  max_lifetime: 1800
+email:
+  from: '"Authentication Service" <root@localhost>'
+  reply_to: '"Authentication Service" <root@localhost>'
+  transport: blackhole
+secrets:
+  encryption: bd63a85436e9b08c1a2856c2b9cf819013687ca03e8eb300e9390b2910440e69
+  keys:
+  - kid: HCz6WaD1Yb
+    key: |
+      -----BEGIN RSA PRIVATE KEY-----
+      MIIEowIBAAKCAQEApMvEVTp3u4H1VwByw6flMgN0AuwLGuRETbUSthR0/OL+V3Jv
+      VkU1hhUhP9IiNO2QfdyuA+wK/WEDTVZP9+6Wz7j5w+fIE3e8zyRomIMvrwyvlbgR
+      Oe1ejOxAadVMPvrBaHlt3dciklGoSdbAmPGJI9Nedb60NzPu4GokpdXwJJkAWHIe
+      r2priYiUSG/3/2+mAqPElkuJfBZbnUVEBQb63+BoeheSBs5Y8Ft4cPGQzADg9jWM
+      OcGwXt0p5Mc+Oy7ud1Se0E1fRv2FlxFqDRITc6Uwo70VavzieqQtBhGPAj6Rz5Zy
+      2Mj3YuJ6riEPi31nvDR4xrXlibx5P0wupTdYpwIDAQABAoIBAGOS19Ojm1sKAGMM
+      W0vLc9pPadamJ2OdT4Qgh+jK3ZE72vCdrZZUBS46MDfu0UpnzOmv4Nlv04gcCTG+
+      mF03pZpnq0rrDuJsdAI5fpXAlpxPrvxpFseInJvL2HPaNNLNEvX8gR0M88+zVVsg
+      TolbUED8Y1QD4cKFN64TlIc7iHmjnNHUrnKgMOacO9tGHcCK98/790VyoUjZT/MV
+      7ICgLZBVjRbBwC915fZo847F40ms/7vtW8XqNd937Y7lwA1JsT406FbdiQEhYZyF
+      lJnImNBFHg9v0JxEKyS5H/QRUyJ0F4QQOlZc4Br9pJx2dJenzC5aVGFtcX0sQQ0S
+      oTY938ECgYEA1AWy3zxOCi8vbFqVKSFdQHY1vdzPHtrN1YBmq7KOMEJZd9DfpdEK
+      RIg9CBguSiqsinNVkTVHPbBMy6CUchtt4sSTWj4aQaCLNI0TTfuGM7tLh/oDazx/
+      He2WLrZFqE+ws98q+KSFdXyxp37P/PZSamtwRaSY9mlkDrbgL/LUh2ECgYEAxvpe
+      sAnuRRVmc3k+HszyybVJ8CPqs5HB5uhlPYHmViEL5IL66ichCnsydeiC7L8Ng2dB
+      tFygSArF1qe8MBUql9zJxaLSTl8DrfIIZPT4fD2QhgcFDPT4BWnC87VKzdd6zWup
+      ABfPieP7O/c9kWH7xy9Gf+yAYf7dpDkF65F6xQcCgYEArhSTvch0xtXhGRTynVeg
+      ihnEnEPc5xd9owuOwPCU4DjJ3p9n0WxmAsjdW3UHJKwPCIoTumrFOHg1RYdt+pZc
+      zbDaz2BoDHQ1d4tRS1j14imopVd4USbVtAvroCTV4pCzo6vbS1VBoqoj70MmoCra
+      ljfqcbPoR4FWvuIWBihZqWECgYB2HGxUZrCvBVL5PIDpW5LKtPgcudU5nk3ROSXP
+      aupFOfyLOkyi7XMpe5Oqdcgxq/7jf0l7PHhQC0UAdDS6/fV4i7ChxlK7/p56hG8D
+      Ln7JkOnXBRe0Zz1KSUtVysmKglv8z+lTis7A9TlOkSZUxCrmQ2O/z60tflImh0rC
+      WGrdxQKBgH0znMuclvibdP8oyVBAuqhxG6lSY7vDg3yxn7GxPZa+EdAYYogRC29Y
+      +e4crJMmGHhOQeTJDVJJwaYu+EcjMlo71clg9kDCdW0zT5crj+TN6e4F9T9pdgXI
+      uuCq4b5oYIzKWtxvtc/eurEWeVSxA1+3kHWLFayBjMNP7hpym6nb
+      -----END RSA PRIVATE KEY-----
+  - kid: 6l7I2ujJt5
+    key: |
+      -----BEGIN EC PRIVATE KEY-----
+      MHcCAQEEIF3x4gtbxqxhr0L1LlWxA3V/t93C7agK4lBSLrXLgjKMoAoGCCqGSM49
+      AwEHoUQDQgAEcCMlCZcJaZ8JaqTZZ/fUvnUlaAbsV+CCltlihy0ejjTbyRgq3Gg3
+      fdhSjpilVOcqRYOjMKM3hGsGG88lLdHY5g==
+      -----END EC PRIVATE KEY-----
+  - kid: 30fCedYYBY
+    key: |
+      -----BEGIN EC PRIVATE KEY-----
+      MIGkAgEBBDCkPiLmi7EWIV5G9DKyYrbYIasY2Kun43hqUNC+Tu+2w7B26LkQL/Uj
+      n7aeCeKFXbOgBwYFK4EEACKhZANiAARFglbe+xeR2W3mXwejUQaMmJPkg7rq3jD9
+      vZRe9gNaGSjlNK4KHioxDjzAWv5czoHW/QFPdo9llTJXBkvZ69U0dK0PNDz4R1kl
+      gXlJtrD5tbzQyYXr0G7ho+W8eEfWwdo=
+      -----END EC PRIVATE KEY-----
+  - kid: X2bi62OXOo
+    key: |
+      -----BEGIN EC PRIVATE KEY-----
+      MHQCAQEEIPGIGKxZpr7DPdj8C6T18YHRB+SrJutgp5VpOcvIS1/foAcGBSuBBAAK
+      oUQDQgAE9CPvuXIQ6hMqflXJ2ttNYx+8i7Z4/RCDLhX2JzI5nKKKQA1LuLJ7Bjkb
+      DR6ov9amUjkYxgAULMwhQy8bqzoFvQ==
+      -----END EC PRIVATE KEY-----
+passwords:
+  enabled: true
+  schemes:
+  - version: 1
+    algorithm: argon2id
+  minimum_complexity: 3
+matrix:
+  homeserver: localhost
+  secret: wGJQDlCykpENUNvwo9ouFYOdqYiVpdi1
+  endpoint: http://localhost:8008/
+upstream_oauth2:
+  providers:
+  - id: 01M64S972KPWXPDF5YMQ50YB19
+    issuer: http://localhost:5556/dex
+    discovery_mode: disabled
+    authorization_endpoint: http://localhost:5556/dex/auth
+    token_endpoint: http://localhost:5556/dex/token
+    jwks_uri: http://localhost:5556/dex/keys
+    userinfo_endpoint: http://localhost:5556/dex/userinfo
+    human_name: Dex (dev mock)
+    client_id: mas-local
+    client_secret: mas-dex-secret
+    token_endpoint_auth_method: client_secret_basic
+    scope: "openid profile email"
+    claims_imports:
+      subject:
+        template: "{{ user.sub }}"
+      email:
+        template: "{{ user.email }}"
+        set_email_verification: always
+      displayname:
+        template: "{{ user.name }}"
+clients:
+- client_id: 01M64SQCYE1GRW2043T4TYQRHE
+  client_auth_method: none
+  redirect_uris:
+  - "http://localhost:8088/?no_universal_links=true"
+  - "http://localhost:8088/"

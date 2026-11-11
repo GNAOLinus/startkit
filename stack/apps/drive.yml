@@ -1,0 +1,169 @@
+# La Suite Drive (« Fichiers ») — http://fichiers.localhost:8000
+#
+# Images officielles v0.26.0 (lasuite/drive-backend, lasuite/drive-frontend), montées
+# comme Docs : c'est drive-frontend (nginx) qui route tout avec
+# stack/drive/default.conf.template (d'après les nginx du dépôt drive et les ingress
+# du chart helm) ; Caddy lui passe simplement l'hôte (stack/caddy/apps/drive.caddy) :
+#   /api, /admin, /external_api, /static -> drive-backend:8000
+#   /media/ et /media/preview/ -> auth_request au backend puis lecture dans
+#                                 s3:9000/drive-media-storage
+#   le reste -> fichiers statiques du frontend (même conteneur, port 8080)
+#
+# Envoi des fichiers : le navigateur fait un PUT direct sur S3 avec une URL présignée
+# par le backend pour http://s3.localhost:8000 (AWS_S3_DOMAIN_REPLACE dans
+# stack/env/drive.env), via le site s3.localhost de Caddy. Le CORS de S3 (silo/MinIO :
+# toutes origines par défaut) suffit, rien à configurer sur le bucket.
+#
+# Variables : stack/env/drive.env. Chemins relatifs à ce fichier (stack/apps/).
+#
+# Au premier `docker compose up -d`, drive-migrate passe avant les autres :
+# migrations Django + super-utilisateur admin@startkit.localhost / admin.
+# Idempotent, rejoué à chaque `up` (c'est aussi la procédure de mise à jour).
+#
+# Non lancés :
+#   - celery beat : il ne planifie que la config WOPI (désactivée) et, si on les
+#     renseigne, CLEAN_PENDING_ITEMS_SCHEDULE / PURGE_DELETED_ITEMS_SCHEDULE ;
+#     à la main au besoin : docker compose exec drive-backend python manage.py
+#     clean_pending_items (ou purge_deleted_items) ;
+#   - indexation Find, antivirus (backend « dummy » : tout fichier est déclaré sain),
+#     ds-proxy (chiffrement).
+#
+# Édition bureautique en ligne (WOPI) : désactivée (WOPI_CLIENTS vide). Pour l'ajouter
+# plus tard, sous un profil `office` (docker compose --profile office up -d) :
+#   - un service drive-collabora (collabora/code, `--o:ssl.enable=false`,
+#     aliasgroup1=http://drive-backend:8000) avec `profiles: [office]` ;
+#   - un hôte public pour l'éditeur (ex. bureautique.localhost) : alias réseau du
+#     proxy + site Caddy -> drive-collabora:9980 ;
+#   - dans drive.env : WOPI_CLIENTS=collabora,
+#     WOPI_COLLABORA_DISCOVERY_URL=http://drive-collabora:9980/hosting/discovery,
+#     WOPI_SRC_BASE_URL=http://drive-backend:8000 ;
+#   - puis `python manage.py trigger_wopi_configuration` (et un celery beat pour la
+#     rafraîchir chaque nuit).
+
+x-drive-backend: &drive-backend
+  image: lasuite/drive-backend:v0.26.0
+  env_file: ../env/drive.env
+  configs:
+    - source: drive-settings-http
+      target: /app/drive/settings_http.py
+
+services:
+  # Migrations + super-utilisateur Django (commande createsuperuser du projet,
+  # idempotente : crée ou met à jour), puis s'arrête.
+  drive-migrate:
+    <<: *drive-backend
+    command:
+      - sh
+      - -c
+      - >
+        python manage.py migrate --no-input &&
+        python manage.py createsuperuser --email "$$DJANGO_SUPERUSER_EMAIL" --password "$$DJANGO_SUPERUSER_PASSWORD"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # API Django. Commande de l'image (gunicorn, config /usr/local/etc/gunicorn/drive.py
+  # qui fixe 3 workers) avec 2 workers : l'option en ligne de commande l'emporte.
+  drive-backend:
+    <<: *drive-backend
+    command:
+      - gunicorn
+      - -c
+      - /usr/local/etc/gunicorn/drive.py
+      - --workers
+      - "2"
+      - drive.wsgi:application
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      drive-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Tâches asynchrones : duplication, suppression/purge, e-mails de partage, etc.
+  # Même commande que le worker du chart helm, concurrence 1 ici.
+  drive-celery:
+    <<: *drive-backend
+    command:
+      - celery
+      - -A
+      - drive.celery_app
+      - worker
+      - -l
+      - INFO
+      - -n
+      - drive@%h
+      - --concurrency=1
+    depends_on:
+      drive-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Interface (Next.js exporté, servi par le nginx de l'image sur :8080) et routeur
+  # de l'application sur :8083 (template monté, rendu par l'entrypoint officiel de
+  # l'image nginx-unprivileged ; l'utilisateur 101 peut écrire dans conf.d).
+  drive-frontend:
+    image: lasuite/drive-frontend:v0.26.0
+    user: "101"
+    entrypoint:
+      - /docker-entrypoint.sh
+    command: ["nginx", "-g", "daemon off;"]
+    environment:
+      BACKEND_HOST: drive-backend
+      FRONTEND_HOST: 127.0.0.1
+      S3_HOST: s3:9000
+      BUCKET_NAME: drive-media-storage
+    volumes:
+      - ../drive/default.conf.template:/etc/nginx/templates/drive.conf.template:ro
+    depends_on:
+      drive-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+configs:
+  # Classe de configuration Django "Http" : Production sans HTTPS.
+  # Production force en dur (aucune variable d'environnement) SECURE_SSL_REDIRECT,
+  # SECURE_PROXY_SSL_HEADER, HSTS et cookies Secure ; Development, lui, charge
+  # django_extensions et debug_toolbar, absents de l'image de production.
+  drive-settings-http:
+    content: |
+      """Drive en HTTP simple pour la stack locale : Production sans HTTPS."""
+
+      from drive.settings import Production
+
+
+      class Http(Production):
+          """Production settings served over plain HTTP (local stack only)."""
+
+          SECURE_SSL_REDIRECT = False
+          SECURE_PROXY_SSL_HEADER = None
+          SECURE_HSTS_SECONDS = 0
+          SECURE_HSTS_PRELOAD = False
+          SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+          SESSION_COOKIE_SECURE = False
+          CSRF_COOKIE_SECURE = False

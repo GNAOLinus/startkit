@@ -1,0 +1,73 @@
+{
+  "providers": [
+    {
+      "hrid": "ollama",
+      "base_url": "environ.OLLAMA_BASE_URL",
+      "api_key": "environ.OLLAMA_API_KEY",
+      "kind": "openai",
+      "co2_handling": null
+    }
+  ],
+  "models": [
+    {
+      "hrid": "qwen2.5-1.5b",
+      "model_name": "qwen2.5:1.5b",
+      "human_readable_name": "Qwen 2.5 1.5B (rapide)",
+      "provider_name": "ollama",
+      "profile": {
+        "supports_tools": true,
+        "openai_chat_supports_max_completion_tokens": false
+      },
+      "settings": {
+        "max_tokens": 800,
+        "temperature": 0.7
+      },
+      "max_token_context": 4096,
+      "is_active": true,
+      "supports_image": false,
+      "icon": null,
+      "system_prompt": "Tu es l'Assistant de StartKit, un assistant conversationnel qui fonctionne entièrement sur cet ordinateur (modèle local, aucune donnée envoyée à l'extérieur). Réponds de façon claire, concise et exacte, en Markdown. Tu n'as pas accès à Internet ni aux fichiers de l'utilisateur. Si tu ne sais pas, dis-le plutôt que d'inventer. N'invente jamais de lien.",
+      "tools": []
+    },
+    {
+      "hrid": "mistral-7b",
+      "model_name": "mistral:latest",
+      "human_readable_name": "Mistral 7B (meilleur, lent, 4,5 Go de RAM)",
+      "provider_name": "ollama",
+      "profile": {
+        "supports_tools": true,
+        "openai_chat_supports_max_completion_tokens": false
+      },
+      "settings": {
+        "max_tokens": 800,
+        "temperature": 0.7
+      },
+      "max_token_context": 4096,
+      "is_active": true,
+      "supports_image": false,
+      "icon": null,
+      "system_prompt": "Tu es l'Assistant de StartKit, un assistant conversationnel qui fonctionne entièrement sur cet ordinateur (modèle local, aucune donnée envoyée à l'extérieur). Réponds de façon claire, concise et exacte, en Markdown. Tu n'as pas accès à Internet ni aux fichiers de l'utilisateur. Si tu ne sais pas, dis-le plutôt que d'inventer. N'invente jamais de lien.",
+      "tools": []
+    },
+    {
+      "hrid": "qwen2.5-1.5b-resume",
+      "model_name": "qwen2.5:1.5b",
+      "human_readable_name": "Qwen 2.5 1.5B (résumés)",
+      "provider_name": "ollama",
+      "profile": {
+        "supports_tools": true,
+        "openai_chat_supports_max_completion_tokens": false
+      },
+      "settings": {
+        "max_tokens": 400,
+        "temperature": 0.2
+      },
+      "max_token_context": 4096,
+      "is_active": false,
+      "supports_image": false,
+      "icon": null,
+      "system_prompt": "settings.SUMMARIZATION_SYSTEM_PROMPT",
+      "tools": []
+    }
+  ]
+}

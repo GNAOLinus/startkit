@@ -1,0 +1,32 @@
+# La Suite Projets (kanban, Sails/Node dérivé de Planka) — http://projects.localhost:8000
+#
+# Un seul conteneur : le script de démarrage de l'image (start.sh) lance
+# `node db/init.js` (migrations knex + seed de l'admin par défaut) puis
+# `node app.js --prod` à chaque démarrage. Pas besoin de service d'init séparé.
+#
+# Fichiers (avatars, fonds de projet, pièces jointes) sur volumes nommés :
+# le mode S3 de Projets sert avatars/fonds par URL S3 directe, ce qui
+# exigerait un bucket en lecture publique.
+
+services:
+  projects-app:
+    image: lasuite/projects:1.27.13
+    env_file: ../env/projects.env
+    volumes:
+      - projects-user-avatars:/app/public/user-avatars
+      - projects-background-images:/app/public/project-background-images
+      - projects-attachments:/app/private/attachments
+    # L'image embarque son HEALTHCHECK (node ./healthcheck.js -> GET :1337).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  projects-user-avatars:
+  projects-background-images:
+  projects-attachments:

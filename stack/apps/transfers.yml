@@ -1,0 +1,169 @@
+# La Suite Transfers (envoi de gros fichiers) — http://transfers.localhost:8000
+#
+# Images officielles 0.5.2 (GHCR ; tags sans préfixe « v ») :
+#   - transfers-backend : distroless (aucun shell : pas de `sh -c`), Django +
+#     gunicorn, utilisateur 65532 ;
+#   - transfers-frontend : distroless, Caddy qui sert le SPA (Vite) sur :8080 et
+#     sait aussi proxifier /api, /admin, /static vers le backend.
+# Comme pour Messages, le routage est refait dans stack/caddy/apps/transfers.caddy :
+#   /api, /admin, /static, /__heartbeat__ -> transfers-backend:8000 ;
+#   le reste (SPA, /sw.js, /locales, /images) -> transfers-frontend:8080.
+#
+# Fichiers : tout est chiffré dans le navigateur (AES-256-GCM, WebCrypto), puis
+# envoyé en multipart directement sur S3 via des URL présignées pour
+# http://s3.localhost:8000 (AWS_S3_DOMAIN_REPLACE). Le téléchargement passe par un
+# Service Worker (/sw.js) qui lit S3 en CORS et déchiffre à la volée. WebCrypto et
+# Service Worker exigent un « contexte sécurisé » : c'est le cas de
+# http://*.localhost dans Chrome/Edge/Firefox, pas d'une IP ou d'un autre nom.
+# Le CORS de S3 (silo/MinIO : toutes origines, ETag exposé) suffit.
+#
+# Tâches de fond : Dramatiq sur Redis Streams (Redis >= 7, base 10), pas Celery.
+# `python worker.py` lance le worker et, en sidecar, l'ordonnanceur périodique
+# (expiration, purge S3 différée, nettoyage des brouillons).
+#
+# Courriel : invitations (mode « e-mail ») et accusés de téléchargement partent
+# vers mailpit (mail:1025), visibles sur http://mail.localhost:8000.
+#
+# Variables : stack/env/transfers.env. Chemins relatifs à ce fichier (stack/apps/).
+#
+# Non lancés : file-scanner/ClamAV (SCAN_ENABLED=False : fichiers « skipped »),
+# Drive picker (DRIVE_BASE_URL vide), LaGaufre, Sentry.
+
+x-transfers-backend: &transfers-backend
+  image: ghcr.io/suitenumerique/transfers-backend:0.5.2
+  env_file: ../env/transfers.env
+  configs:
+    - source: transfers-settings-http
+      target: /app/transfers/settings_http.py
+
+services:
+  # Migrations + super-utilisateur Django (admin@startkit.localhost / admin, via la
+  # commande createsuperuser du projet : crée ou met à jour), puis s'arrête.
+  # Image sans shell : les deux commandes sont enchaînées dans `manage.py shell -c`.
+  # Idempotent, rejoué à chaque `docker compose up`. Le bucket transfers-storage
+  # est créé par s3-init (infra.yml).
+  transfers-migrate:
+    <<: *transfers-backend
+    command:
+      - python
+      - manage.py
+      - shell
+      - -c
+      - |
+        from django.core.management import call_command
+        call_command("migrate", interactive=False)
+        call_command("createsuperuser", email="admin@startkit.localhost", password="admin")
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # API Django : commande de l'image, 2 workers gunicorn au lieu de 3
+  # (l'option en ligne de commande l'emporte sur gunicorn.conf.py).
+  transfers-backend:
+    <<: *transfers-backend
+    command:
+      - gunicorn
+      - -c
+      - /app/gunicorn.conf.py
+      - --workers
+      - "2"
+      - transfers.wsgi:application
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/__heartbeat__/', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      transfers-migrate:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+    restart: unless-stopped
+
+  # Worker Dramatiq (1 processus, 1 thread) + ordonnanceur embarqué.
+  # Healthcheck officiel : ping aller-retour par Redis (`worker.py --ping`).
+  transfers-worker:
+    <<: *transfers-backend
+    command: ["python", "worker.py", "--processes", "1", "--threads", "1"]
+    healthcheck:
+      test: ["CMD", "python", "worker.py", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      transfers-migrate:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    restart: unless-stopped
+
+  # SPA servie par le Caddy de l'image (port 8080, healthcheck intégré via lprobe).
+  transfers-frontend:
+    image: ghcr.io/suitenumerique/transfers-frontend:0.5.2
+    environment:
+      # Utilisé seulement si on joint le frontend directement : en temps normal
+      # stack/caddy/apps/transfers.caddy envoie déjà /api, /admin, /static au backend.
+      TRANSFERS_FRONTEND_BACKEND_SERVER: transfers-backend:8000
+      # Origine S3 ajoutée au connect-src de la CSP : envois (PUT des parts) et
+      # téléchargements (fetch du Service Worker). Défaut de l'image : Scaleway,
+      # qui bloquerait tout ici.
+      TRANSFERS_FRONTEND_S3_ORIGIN: http://s3.localhost:8000
+    depends_on:
+      transfers-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+configs:
+  # L'image n'offre que la configuration Production, qui impose HTTPS (redirection
+  # SSL, cookies Secure, HSTS) sans variable pour le désactiver. On la dérive pour
+  # servir en HTTP simple sur transfers.localhost:8000.
+  # Activé par DJANGO_SETTINGS_MODULE=transfers.settings_http et DJANGO_CONFIGURATION=Http.
+  transfers-settings-http:
+    content: |
+      """La Suite en local : configuration Production servie en HTTP simple."""
+
+      from transfers.settings import Production
+
+
+      class Http(Production):
+          """Production sans HTTPS (pas de redirection, de HSTS ni de cookies Secure)."""
+
+          SECURE_SSL_REDIRECT = False
+          SECURE_PROXY_SSL_HEADER = None
+          SECURE_HSTS_SECONDS = 0
+          SECURE_HSTS_PRELOAD = False
+          SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+          SESSION_COOKIE_SECURE = False
+          CSRF_COOKIE_SECURE = False
+          SESSION_COOKIE_NAME = "transfers_sessionid"
+          # Le frontend lit le cookie « csrftoken » : ne pas renommer CSRF_COOKIE_NAME.
+          # Schéma OpenAPI pour tester l'API à la main :
+          # /api/v1.0/swagger.json, /api/v1.0/swagger/ (UI chargée depuis un CDN).
+          USE_SWAGGER = True

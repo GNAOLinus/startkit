@@ -1,0 +1,94 @@
+name: tchap-local
+
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: synapse-tchap-local
+    network_mode: host
+    volumes:
+      - /home/linus/Bureau/sites/StartKit/synapse-data:/data
+    depends_on:
+      mas:
+        condition: service_started
+    restart: unless-stopped
+
+  mas-postgres:
+    image: postgres:16-alpine
+    container_name: mas-postgres
+    environment:
+      POSTGRES_USER: mas
+      POSTGRES_PASSWORD: maspassword
+      POSTGRES_DB: mas
+    ports:
+      - "5434:5432"
+    volumes:
+      - mas-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mas -d mas"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  dex:
+    image: dexidp/dex:latest
+    container_name: dex-local
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+    restart: unless-stopped
+
+  mas:
+    image: ghcr.io/element-hq/matrix-authentication-service:latest
+    container_name: mas-local
+    network_mode: host
+    command: ["-c", "/config.yaml", "server"]
+    volumes:
+      - ./mas/config.yaml:/config.yaml:ro
+    depends_on:
+      mas-postgres:
+        condition: service_healthy
+      dex:
+        condition: service_started
+    restart: unless-stopped
+
+  # Front Tchap en mode dev (webpack-dev-server + hot reload) sur http://localhost:8088.
+  # Le repo et le store pnpm sont montés au même chemin que sur l'hôte et le conteneur
+  # tourne avec ton UID, pour que node_modules reste compatible avec un pnpm lancé hors Docker.
+  web:
+    image: node:24-bookworm
+    container_name: tchap-web-local
+    network_mode: host
+    user: "1000:1000"
+    working_dir: /home/linus/Bureau/sites/StartKit/tchap/tchap-web-v4/apps/web
+    environment:
+      HOME: /home/linus
+      COREPACK_HOME: /home/linus/.cache/node/corepack
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      NX_DAEMON: "false"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /tmp/bin
+        corepack enable --install-directory /tmp/bin
+        export PATH=/tmp/bin:$$PATH
+        pnpm install --prefer-offline --network-concurrency=4 --config.confirmModulesPurge=false
+        pnpm start
+    volumes:
+      - /home/linus/Bureau/sites/StartKit/tchap/tchap-web-v4:/home/linus/Bureau/sites/StartKit/tchap/tchap-web-v4
+      - /home/linus/.local/share/pnpm/store:/home/linus/.local/share/pnpm/store
+      - /home/linus/.cache/node/corepack:/home/linus/.cache/node/corepack
+      - /home/linus/.cache/pnpm:/home/linus/.cache/pnpm
+    depends_on:
+      - synapse
+    restart: unless-stopped
+
+volumes:
+  # Nom fixé : le volume garde ses données (dont le compte alice) que la stack
+  # soit lancée seule (projet tchap-local) ou incluse dans StartKit/compose.yml.
+  mas-postgres-data:
+    name: tchap-local_mas-postgres-data

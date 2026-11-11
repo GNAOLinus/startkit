@@ -1,0 +1,22 @@
+# La Suite Transfers.
+# Reproduit le routage du Caddyfile de l'image frontend (src/frontend/caddy/Caddyfile) :
+# /api, /admin, /static, /__heartbeat__ -> backend Django ; tout le reste -> frontend
+# (SPA, /sw.js du déchiffrement, /locales, /images, /__lbheartbeat__).
+# Pas d'en-tête X-Forwarded-Proto https ici : le backend tourne en HTTP simple
+# (configuration Http, voir stack/apps/transfers.yml).
+# Les fichiers ne passent pas par ici : le navigateur les envoie et les relit
+# directement sur http://s3.localhost:8000 (URL présignées).
+http://transfers.localhost:8000 {
+	@transfers_backend path /api/* /admin /admin/* /static/* /__heartbeat__/*
+	handle @transfers_backend {
+		reverse_proxy transfers-backend:8000
+	}
+
+	handle {
+		# Le Caddy de l'image ajoute ses en-têtes de sécurité (CSP, COOP...) ; on ne
+		# retire que le HSTS, sans objet en HTTP.
+		reverse_proxy transfers-frontend:8080 {
+			header_down -Strict-Transport-Security
+		}
+	}
+}

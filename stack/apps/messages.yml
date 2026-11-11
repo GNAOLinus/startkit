@@ -1,0 +1,212 @@
+# La Suite Messages (messagerie collaborative) — http://messages.localhost:8000
+#
+# Images officielles 0.10.0 (GHCR ; les tags n'ont pas de préfixe « v »).
+# Routage HTTP dans stack/caddy/apps/messages.caddy (reproduit le Caddyfile de
+# l'image frontend) : /api, /admin, /static, /__heartbeat__ -> messages-backend:8000 ;
+# le reste -> messages-frontend:8080.
+#
+# Courriel :
+#   - sortant : relayé vers mailpit (MTA_OUT_MODE=relay, mail:1025), visible sur
+#     http://mail.localhost:8000 ;
+#   - entrant : messages-mta-in (pymta), publié sur le port hôte 2525
+#     (swaks --to user1@startkit.localhost --server localhost:2525).
+# Domaine de messagerie startkit.localhost en « oidc_autojoin » : chaque utilisateur
+# Keycloak en @startkit.localhost reçoit sa boîte à la connexion.
+#
+# Variables : stack/env/messages.env. Chemins relatifs à ce fichier (stack/apps/).
+#
+# Non lancés : rspamd (mpa, SPAM_CONFIG={}), socks-proxy (inutile en relais),
+# MTA Postfix historique (remplacé par pymta).
+# Recherche facultative : sans messages-opensearch, mettre OPENSEARCH_INDEX_THREADS=False
+# dans messages.env et retirer le service + ses depends_on (la recherche renvoie alors
+# des résultats vides, le reste fonctionne).
+
+x-messages-backend: &messages-backend
+  image: ghcr.io/suitenumerique/messages-backend:0.10.0
+  env_file: ../env/messages.env
+  configs:
+    - source: messages-settings-http
+      target: /app/messages/settings_http.py
+
+services:
+  # Migrations, buckets S3 (imports / blobs), index OpenSearch, super-utilisateur
+  # Django (admin@startkit.localhost / admin) et domaine startkit.localhost, puis s'arrête.
+  # Idempotent : relancé à chaque `docker compose up`.
+  messages-migrate:
+    <<: *messages-backend
+    configs:
+      - source: messages-settings-http
+        target: /app/messages/settings_http.py
+      - source: messages-bootstrap
+        target: /startkit/messages-bootstrap.py
+    command:
+      - sh
+      - -c
+      - >
+        python manage.py migrate --noinput &&
+        python manage.py create_bucket --storage message-imports --expire-days 7 &&
+        python manage.py create_bucket --storage message-blobs &&
+        python manage.py search_index_create &&
+        python manage.py createsuperuser --email admin@startkit.localhost --password admin &&
+        python manage.py shell < /startkit/messages-bootstrap.py
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+      messages-opensearch:
+        condition: service_healthy
+    restart: "no"
+
+  messages-backend:
+    <<: *messages-backend
+    # Commande de l'image (gunicorn) ; GUNICORN_CMD_ARGS (messages.env) passe à 2 workers.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/__heartbeat__/', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      messages-migrate:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      messages-opensearch:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+    restart: unless-stopped
+
+  # Celery (envoi/réception, indexation, tâches planifiées via --beat), 1 processus.
+  messages-worker:
+    <<: *messages-backend
+    command: ["python", "worker.py", "--concurrency=1"]
+    healthcheck:
+      disable: true
+    depends_on:
+      messages-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      messages-opensearch:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    restart: unless-stopped
+
+  # SPA servie par le Caddy de l'image (port 8080, healthcheck intégré).
+  messages-frontend:
+    image: ghcr.io/suitenumerique/messages-frontend:0.10.0
+    environment:
+      MESSAGES_FRONTEND_BACKEND_SERVER: messages-backend:8000
+    depends_on:
+      messages-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # MTA entrant (pymta) : vérifie chaque destinataire puis livre le message au
+  # backend (API MDA, JWT signé avec MDA_API_SECRET). Seul port hôte : 2525.
+  messages-mta-in:
+    image: ghcr.io/suitenumerique/messages-mta-in-py:0.10.0
+    env_file: ../env/messages.env
+    environment:
+      # messages.env fixe PYTHONPATH=/app pour le backend ; le module pymta
+      # de cette image est dans /app/src.
+      PYTHONPATH: /app/src
+    ports:
+      - "2525:25"
+    # L'image tourne en uid 65532 : autorise l'écoute sur le port 25 sans capacité.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      messages-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Recherche plein texte. Nœud unique, sécurité désactivée, tas JVM de 512 Mo.
+  messages-opensearch:
+    image: opensearchproject/opensearch:2.19.2
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      # Poste de dev au disque presque plein : sans ça, OpenSearch bloque la
+      # création d'index dès 95 % d'occupation (« create-index blocked »).
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - messages-opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    restart: unless-stopped
+
+configs:
+  # L'image n'offre que la configuration Production, qui impose HTTPS (redirection
+  # SSL, cookies Secure, HSTS) sans variable pour le désactiver. On la dérive pour
+  # servir en HTTP simple sur messages.localhost:8000.
+  # Activé par DJANGO_SETTINGS_MODULE=messages.settings_http et DJANGO_CONFIGURATION=Http.
+  messages-settings-http:
+    content: |
+      """La Suite en local : configuration Production servie en HTTP simple."""
+
+      from messages.settings import Production
+
+
+      class Http(Production):
+          """Production sans HTTPS (pas de redirection, de HSTS ni de cookies Secure)."""
+
+          SECURE_SSL_REDIRECT = False
+          SECURE_PROXY_SSL_HEADER = None
+          SECURE_HSTS_SECONDS = 0
+          SECURE_HSTS_PRELOAD = False
+          SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+          SESSION_COOKIE_SECURE = False
+          CSRF_COOKIE_SECURE = False
+          SESSION_COOKIE_NAME = "messages_sessionid"
+
+  # Domaine startkit.localhost en oidc_autojoin + boîtes user1..3 créées d'avance,
+  # pour recevoir du courrier avant même la première connexion.
+  messages-bootstrap:
+    content: |
+      from core.models import Mailbox, MailDomain
+
+      domain, _ = MailDomain.objects.get_or_create(name="startkit.localhost")
+      if not domain.oidc_autojoin:
+          domain.oidc_autojoin = True
+          domain.save()
+      for local_part in ("user1", "user2", "user3"):
+          Mailbox.objects.get_or_create(local_part=local_part, domain=domain)
+      print("Domaine startkit.localhost (oidc_autojoin) et boîtes user1..3 prêts.")
+
+volumes:
+  messages-opensearch-data:

@@ -1,0 +1,10 @@
+# La Suite Docs.
+# Comme dans l'exemple compose officiel (nginx-proxy -> frontend:8083), tout le
+# routage est fait par le nginx du conteneur docs-frontend, avec le template
+# stack/docs/default.conf.template : /api, /admin, /external_api, /static vers le
+# backend, /media/ via auth_request au backend puis S3, /collaboration/ vers yhub
+# (websocket compris), le reste vers l'éditeur. Caddy relaie les websockets
+# nativement, sans délai d'inactivité.
+http://docs.localhost:8000 {
+	reverse_proxy docs-frontend:8083
+}

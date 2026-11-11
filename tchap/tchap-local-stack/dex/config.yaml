@@ -1,0 +1,26 @@
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: mas-local
+    redirectURIs:
+      - 'http://localhost:8084/upstream/callback/01M64S972KPWXPDF5YMQ50YB19'
+    name: 'MAS Local'
+    secret: mas-dex-secret
+
+enablePasswordDB: true
+
+staticPasswords:
+  - email: "test@tchap.localhost"
+    # bcrypt hash of "password"
+    hash: "$2y$05$lmDjRT/F5WNZVr5nvyDLeuBb2qjrde4FNwlnKCCmJtXQIsD2jCjra"
+    username: "test"
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"

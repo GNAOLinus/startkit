@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="StartKit">
+  <style>
+    .base { fill: #1b1b6b; }
+    @media (prefers-color-scheme: dark) { .base { fill: #c9cbff; } }
+  </style>
+  <!-- Trois applications posées sur une base commune -->
+  <rect x="8" y="27" width="14" height="13" rx="3.5" fill="#4f5bff"/>
+  <rect x="25" y="13" width="14" height="27" rx="3.5" fill="#22a699"/>
+  <rect x="42" y="31" width="14" height="9" rx="3.5" fill="#ff6b57"/>
+  <rect class="base" x="5" y="44" width="54" height="10" rx="4"/>
+</svg>

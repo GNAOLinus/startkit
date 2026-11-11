@@ -1,0 +1,10 @@
+# La Suite Drive (« Fichiers »).
+# Comme pour Docs, tout le routage est fait par le nginx du conteneur drive-frontend,
+# avec le template stack/drive/default.conf.template : /api, /admin, /external_api,
+# /static vers le backend, /media/ et /media/preview/ via auth_request au backend puis
+# S3, le reste vers l'interface.
+# Les envois de fichiers ne passent pas par ici : le navigateur les dépose directement
+# sur http://s3.localhost:8000 (URL présignée), voir le site s3.localhost du Caddyfile.
+http://fichiers.localhost:8000 {
+	reverse_proxy drive-frontend:8083
+}

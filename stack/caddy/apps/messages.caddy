@@ -1,0 +1,15 @@
+# La Suite Messages.
+# Reproduit le routage du Caddyfile de l'image frontend (src/frontend/caddy/Caddyfile) :
+# /api, /admin, /static, /__heartbeat__ -> backend Django ; tout le reste -> frontend (SPA).
+# Pas d'en-tête X-Forwarded-Proto https ici : le backend tourne en HTTP simple
+# (configuration Http, voir stack/apps/messages.yml).
+http://messages.localhost:8000 {
+	@messages_backend path /api/* /admin /admin/* /static/* /__heartbeat__/*
+	handle @messages_backend {
+		reverse_proxy messages-backend:8000
+	}
+
+	handle {
+		reverse_proxy messages-frontend:8080
+	}
+}

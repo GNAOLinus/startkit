@@ -1,0 +1,5 @@
+# La Suite Projets — l'app sert l'API, le front et socket.io sur le même port.
+# Caddy relaie les upgrades WebSocket sans configuration supplémentaire.
+http://projects.localhost:8000 {
+	reverse_proxy projects-app:1337
+}

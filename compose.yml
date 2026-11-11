@@ -1,0 +1,21 @@
+# StartKit — La Suite numérique en local. Une seule commande pour tout lancer :
+#
+#   docker compose up -d
+#
+# Accueil : http://startkit.localhost:8000 · Applications : http://startkit.localhost:8000/espace/
+# Détails : README.md
+
+name: startkit
+
+include:
+  - stack/infra.yml
+  - stack/apps/projects.yml
+  - stack/apps/meet.yml
+  - stack/apps/messages.yml
+  - stack/apps/docs.yml
+  - stack/apps/grist.yml
+  - stack/apps/drive.yml
+  - stack/apps/transfers.yml
+  - stack/apps/ia.yml
+  # Ta stack Tchap (Synapse + MAS + Dex + front en mode dev), inchangée.
+  - tchap/tchap-local-stack/docker-compose.yml

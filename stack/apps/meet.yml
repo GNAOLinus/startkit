@@ -1,0 +1,154 @@
+# La Suite Meet (Visio) — http://visio.localhost:8000
+#
+# Images officielles v1.37.0. Routage HTTP dans stack/caddy/apps/meet.caddy
+# (reproduit docker/files/production/default.conf.template du dépôt meet) :
+#   /api, /admin, /static -> meet-backend:8000 ; le reste -> meet-frontend:8080.
+# LiveKit : signalisation via Caddy (ws://livekit.localhost:8000), média WebRTC sur
+# les ports hôte 7881/tcp et 7882/udp (seuls ports publiés de l'application).
+#
+# Variables : stack/env/meet.env ; LiveKit : stack/meet/livekit.yaml.
+# Chemins relatifs à ce fichier (stack/apps/).
+#
+# Non lancés par défaut (trop lourds pour cette machine) :
+#   - meet-egress (enregistrement des réunions), derrière le profil "recording" :
+#       docker compose --profile recording up -d
+#     puis RECORDING_ENABLE=True dans stack/env/meet.env et décommenter le bloc
+#     /media/recordings/* de stack/caddy/apps/meet.caddy.
+#   - summary (transcription/résumé : lasuite/meet-summary + Whisper/LLM) et
+#     agents (sous-titres, metadata : lasuite/meet-agents) : non fournis ici,
+#     voir docs/features/{summarization,transcription,subtitles}.md du dépôt meet.
+#   - Celery : inutile, CELERY_ENABLED=False (les tâches s'exécutent dans le backend).
+
+x-meet-backend: &meet-backend
+  image: lasuite/meet-backend:v1.37.0
+  env_file: ../env/meet.env
+  configs:
+    - source: meet-settings-http
+      target: /app/meet/settings_http.py
+
+services:
+  # Migrations + super-utilisateur Django (admin@startkit.localhost / admin), puis s'arrête.
+  meet-migrate:
+    <<: *meet-backend
+    command:
+      - sh
+      - -c
+      - >
+        python manage.py migrate --noinput &&
+        python manage.py createsuperuser --email admin@startkit.localhost --password admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  meet-backend:
+    <<: *meet-backend
+    # Même commande que l'image, avec 2 workers au lieu de 3 (RAM).
+    command:
+      - gunicorn
+      - -c
+      - /usr/local/etc/gunicorn/meet.py
+      - --workers=2
+      - meet.wsgi:application
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      meet-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meet-livekit:
+        condition: service_started
+    restart: unless-stopped
+
+  # SPA React servie par nginx (port 8080 dans l'image).
+  meet-frontend:
+    image: lasuite/meet-frontend:v1.37.0
+    depends_on:
+      meet-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  meet-livekit:
+    image: livekit/livekit-server:v1.13.10
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ../meet/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      # node_ip=127.0.0.1 dans livekit.yaml : publication sur la boucle locale uniquement.
+      - "127.0.0.1:7881:7881/tcp"
+      - "127.0.0.1:7882:7882/udp"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Enregistrement (profil "recording", désactivé par défaut) ---------------
+  # Image ~2,5 Go, Chrome headless + GStreamer : prévoir 2 Go de RAM et des CPU.
+  # Partage le réseau de meet-livekit : les candidats ICE annoncés (127.0.0.1)
+  # y désignent bien LiveKit. Upload des fichiers dans le bucket S3 meet-recordings.
+  meet-egress:
+    image: livekit/egress:v1.15.0
+    profiles: ["recording"]
+    network_mode: "service:meet-livekit"
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    configs:
+      - source: meet-egress-config
+        target: /etc/egress.yaml
+    cap_add:
+      - SYS_ADMIN
+    depends_on:
+      meet-livekit:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+configs:
+  # Classe de configuration Django "Http" : Production sans HTTPS.
+  # Production force SECURE_SSL_REDIRECT, cookies Secure et HSTS en dur (aucune variable
+  # d'environnement), et Development charge django_extensions, absent de l'image.
+  meet-settings-http:
+    content: |
+      """Meet en HTTP simple pour la stack locale : Production sans HTTPS."""
+
+      from meet.settings import Production
+
+
+      class Http(Production):
+          """Production settings served over plain HTTP (local stack only)."""
+
+          SECURE_SSL_REDIRECT = False
+          SECURE_PROXY_SSL_HEADER = None
+          SECURE_HSTS_SECONDS = 0
+          SECURE_HSTS_PRELOAD = False
+          SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+          SESSION_COOKIE_SECURE = False
+          CSRF_COOKIE_SECURE = False
+
+  meet-egress-config:
+    content: |
+      logging:
+        level: info
+      api_key: meet
+      api_secret: meet-livekit-secret-bd33da5fe0a97f44111376a1d46b91a9
+      ws_url: ws://127.0.0.1:7880
+      insecure: true
+      redis:
+        address: redis:6379
+        db: 3

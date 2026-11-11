@@ -1,0 +1,241 @@
+# La Suite Docs — http://docs.localhost:8000
+#
+# Images officielles v6.0.4, d'après documentation/examples/compose/compose.yaml
+# du dépôt docs. Comme dans l'exemple, c'est docs-frontend (nginx) qui route tout
+# avec stack/docs/default.conf.template (copie adaptée du template officiel) ;
+# Caddy lui passe simplement l'hôte (stack/caddy/apps/docs.caddy) :
+#   /api, /admin, /external_api, /static -> docs-backend:8000
+#   /collaboration/ws/ (websocket) et /collaboration/{ydoc,...,jwks}/ -> docs-yhub:3002
+#   /media/ -> auth_request au backend puis lecture dans s3:9000/docs-media-storage
+#   le reste -> fichiers statiques du frontend (même conteneur, port 3000)
+#
+# Variables : stack/env/docs.env (backend), docs-yhub.env, docs-y-provider.env.
+# Chemins relatifs à ce fichier (stack/apps/).
+#
+# Au premier `docker compose up -d`, trois services ponctuels passent avant les autres :
+#   docs-keys       génère les deux clés RSA des JWT (volumes docs-jwt-*), une seule fois ;
+#   docs-migrate    migrations Django + super-utilisateur admin@startkit.localhost / admin ;
+#   docs-yhub-init  schéma postgres du serveur de collaboration (yarn init-db).
+# Tous sont idempotents et rejoués à chaque `up` (c'est aussi la procédure de mise à jour).
+
+x-docs-backend: &docs-backend
+  image: lasuite/impress-backend:v6.0.4
+  user: "1000"
+  env_file: ../env/docs.env
+  # IA locale : Ollama sur l'hôte, via ollama-relay (stack/apps/ia.yml).
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - docs-jwt-backend:/keys:ro
+  configs:
+    - source: docs-settings-http
+      target: /app/impress/settings_http.py
+
+services:
+  # Clés RSA des JWT échangés entre backend et yhub (chacun signe avec la sienne et
+  # vérifie l'autre via son JWKS). L'exemple officiel les fait générer à la main
+  # avec openssl ; ici une fois pour toutes dans deux volumes, puis s'arrête.
+  docs-keys:
+    image: lasuite/impress-backend:v6.0.4
+    user: "0"
+    command:
+      - python
+      - -c
+      - |
+        import os
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        for path in ("/keys/backend/private.pem", "/keys/yhub/yhub-private.pem"):
+            if os.path.exists(path):
+                print("already there:", path)
+                continue
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            with open(path, "wb") as f:
+                f.write(key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.PKCS8,
+                    serialization.NoEncryption(),
+                ))
+            os.chown(path, 1000, 1000)
+            os.chmod(path, 0o600)
+            print("created:", path)
+    volumes:
+      - docs-jwt-backend:/keys/backend
+      - docs-jwt-yhub:/keys/yhub
+    restart: "no"
+
+  # Migrations + super-utilisateur Django (commande createsuperuser de l'app demo,
+  # idempotente : crée ou met à jour), puis s'arrête.
+  docs-migrate:
+    <<: *docs-backend
+    command:
+      - sh
+      - -c
+      - >
+        python manage.py migrate --no-input &&
+        python manage.py createsuperuser --email "$$DJANGO_SUPERUSER_EMAIL" --password "$$DJANGO_SUPERUSER_PASSWORD"
+    depends_on:
+      docs-keys:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # API Django. Commande par défaut de l'image (uvicorn), WEB_CONCURRENCY=2 dans docs.env.
+  docs-backend:
+    <<: *docs-backend
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      docs-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Tâches asynchrones : e-mails (mentions, demandes d'accès), revérification des
+  # connexions yhub quand les droits changent. Absent de l'exemple compose, présent
+  # dans le chart helm (même commande, concurrence 1 ici).
+  docs-celery:
+    <<: *docs-backend
+    command:
+      - celery
+      - -A
+      - impress.celery_app
+      - worker
+      - -l
+      - INFO
+      - -n
+      - docs@%h
+      - --concurrency=1
+    depends_on:
+      docs-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Schéma postgres du serveur de collaboration (base "yhub"), qui ne fait jamais
+  # de DDL lui-même. Idempotent ; à rejouer après chaque mise à jour, d'où son
+  # exécution à chaque `up`. Puis s'arrête.
+  docs-yhub-init:
+    image: lasuite/impress-yhub:v6.0.4
+    user: "1000"
+    env_file: ../env/docs-yhub.env
+    environment:
+      HOME: /tmp
+    command: ["yarn", "init-db"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Serveur de collaboration : websocket, contenu des documents (postgres + bucket
+  # docs-yhub-storage), file de persistance dans redis (base 1).
+  docs-yhub:
+    image: lasuite/impress-yhub:v6.0.4
+    user: "1000"
+    env_file: ../env/docs-yhub.env
+    environment:
+      HOME: /tmp
+    volumes:
+      - docs-jwt-yhub:/keys:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/collaboration/ready/v1').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      docs-keys:
+        condition: service_completed_successfully
+      docs-yhub-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Conversions (markdown, html, docx, pdf) appelées par le backend uniquement.
+  docs-y-provider:
+    image: lasuite/impress-y-provider:v6.0.4
+    user: "1000"
+    env_file: ../env/docs-y-provider.env
+    environment:
+      HOME: /tmp
+    restart: unless-stopped
+
+  # Éditeur (Next.js exporté, servi par nginx sur :3000) et routeur de l'application
+  # sur :8083 (template monté, rendu par l'entrypoint officiel de l'image nginx).
+  docs-frontend:
+    image: lasuite/impress-frontend:v6.0.4
+    user: "101"
+    entrypoint:
+      - /docker-entrypoint.sh
+    command: ["nginx", "-g", "daemon off;"]
+    environment:
+      BACKEND_HOST: docs-backend
+      FRONTEND_HOST: 127.0.0.1
+      YHUB_HOST: docs-yhub
+      S3_HOST: s3:9000
+      BUCKET_NAME: docs-media-storage
+    volumes:
+      - ../docs/default.conf.template:/etc/nginx/templates/docs.conf.template:ro
+    depends_on:
+      docs-backend:
+        condition: service_healthy
+      docs-yhub:
+        condition: service_healthy
+      docs-y-provider:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  docs-jwt-backend:
+  docs-jwt-yhub:
+
+configs:
+  # Classe de configuration Django "Http" : Production sans HTTPS.
+  # Production force en dur (aucune variable d'environnement) SECURE_SSL_REDIRECT,
+  # SECURE_PROXY_SSL_HEADER, HSTS et cookies Secure ; Development, lui, charge
+  # django_extensions, absent de l'image de production.
+  docs-settings-http:
+    content: |
+      """Docs en HTTP simple pour la stack locale : Production sans HTTPS."""
+
+      from impress.settings import Production
+
+
+      class Http(Production):
+          """Production settings served over plain HTTP (local stack only)."""
+
+          SECURE_SSL_REDIRECT = False
+          SECURE_PROXY_SSL_HEADER = None
+          SECURE_HSTS_SECONDS = 0
+          SECURE_HSTS_PRELOAD = False
+          SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+          SESSION_COOKIE_SECURE = False
+          CSRF_COOKIE_SECURE = False
+          # Appels au y-provider en http://docs-y-provider:4444
+          CONVERSION_API_SECURE = False

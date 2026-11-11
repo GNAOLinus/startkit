@@ -1,0 +1,40 @@
+# LiveKit (SFU WebRTC) pour Visio — configuration locale.
+# Basée sur docs/examples/livekit/server.yaml et docker/livekit/config/livekit-server.yaml du dépôt meet.
+#
+# - Signalisation (HTTP + websocket) sur 7880, servie par Caddy sur http://livekit.localhost:8000
+#   (navigateur : ws://livekit.localhost:8000, backend : http://livekit.localhost:8000).
+# - Média WebRTC : 7882/udp (multiplexage sur un seul port) et 7881/tcp (repli ICE/TCP),
+#   publiés sur 127.0.0.1 de l'hôte. node_ip=127.0.0.1 : les candidats ICE annoncés pointent
+#   sur la machine locale, donc le navigateur de la même machine se connecte directement.
+#   Pour tester depuis un autre poste du réseau, remplacer node_ip par l'IP LAN de la machine
+#   et publier les ports sur 0.0.0.0 dans stack/apps/meet.yml.
+
+port: 7880
+
+logging:
+  level: info
+
+redis:
+  address: redis:6379
+  db: 3
+
+# Doit correspondre à LIVEKIT_API_KEY / LIVEKIT_API_SECRET de stack/env/meet.env
+# (secret : 32 caractères minimum).
+keys:
+  meet: meet-livekit-secret-bd33da5fe0a97f44111376a1d46b91a9
+
+# Événements de salle (participants, lobby, présence, fin d'enregistrement) envoyés au backend.
+webhook:
+  api_key: meet
+  urls:
+    - http://meet-backend:8000/api/v1.0/rooms/webhooks-livekit/
+
+rtc:
+  udp_port: 7882
+  tcp_port: 7881
+  node_ip: 127.0.0.1
+  use_external_ip: false
+
+# Pas de TURN en local (tout est sur la même machine).
+turn:
+  enabled: false

@@ -1,0 +1,38 @@
+# La Suite Meet (Visio).
+# Reproduit le routage de docker/files/production/default.conf.template du dépôt meet :
+# /api, /admin, /static -> backend Django ; tout le reste -> frontend (SPA nginx).
+http://visio.localhost:8000 {
+	@meet_backend path /api* /admin* /static*
+	handle @meet_backend {
+		reverse_proxy meet-backend:8000
+	}
+
+	# Téléchargement des enregistrements (profil "recording" uniquement) :
+	# autorisation par le backend puis lecture dans le bucket S3 meet-recordings,
+	# comme le auth_request nginx de docker/files/etc/nginx/conf.d/default.conf.
+	# Décommenter avec RECORDING_ENABLE=True.
+	#handle /media/recordings/* {
+	#	route {
+	#		forward_auth meet-backend:8000 {
+	#			uri /api/v1.0/recordings/media-auth/
+	#			header_up X-Original-URL {http.request.orig_uri}
+	#			copy_headers Authorization X-Amz-Date X-Amz-Content-SHA256
+	#		}
+	#		uri strip_prefix /media
+	#		rewrite * /meet-recordings{uri}
+	#		reverse_proxy s3:9000 {
+	#			header_up Host s3:9000
+	#			header_down Content-Disposition attachment
+	#		}
+	#	}
+	#}
+
+	handle {
+		reverse_proxy meet-frontend:8080
+	}
+}
+
+# Serveur LiveKit (signalisation HTTP + websocket ; Caddy relaie les websockets nativement).
+http://livekit.localhost:8000 {
+	reverse_proxy meet-livekit:7880
+}

@@ -1,0 +1,29 @@
+# Grist — tableur collaboratif (grist-core) — http://grist.localhost:8000
+#
+# Un seul conteneur. Connexion via le Keycloak partagé (OIDC, client `grist`),
+# base « home » (comptes, sites, droits) dans PostgreSQL, documents .grist
+# dans le volume grist-persist.
+
+services:
+  grist:
+    image: gristlabs/grist:1.7.22
+    env_file: ../env/grist.env
+    volumes:
+      - grist-persist:/persist
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8484/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  grist-persist:

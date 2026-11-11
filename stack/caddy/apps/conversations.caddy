@@ -1,0 +1,46 @@
+# La Suite Conversations (« Assistant »).
+# Reproduit les ingress du chart helm (ingress, ingressAdmin, ingressMedia) :
+#   /api -> backend Django (ASGI). Les réponses du chat sont un flux SSE
+#           (text/event-stream, protocole « UI message stream » du Vercel AI SDK) :
+#           flush_interval -1 pour que chaque fragment parte aussitôt, sans tampon ;
+#   /admin, /static (admin Django, servi par servestatic), sondes -> backend ;
+#   /media/ -> le backend autorise (media-auth, cookie de session) et renvoie des
+#              en-têtes S3 signés, puis lecture dans s3:9000/conversations-storage ;
+#   le reste -> SPA (nginx de conversations-frontend).
+# Pas d'en-tête X-Forwarded-Proto https ici : le backend tourne en HTTP simple
+# (configuration Http, voir stack/apps/ia.yml).
+http://assistant.localhost:8000 {
+	handle /api/* {
+		reverse_proxy conversations-backend:8000 {
+			flush_interval -1
+		}
+	}
+
+	@conversations_backend path /admin /admin/* /static/* /__heartbeat__* /__lbheartbeat__*
+	handle @conversations_backend {
+		reverse_proxy conversations-backend:8000
+	}
+
+	# Équivalent de l'auth_request nginx de l'ingress media. `route` garde l'ordre
+	# écrit (sinon Caddy réécrirait l'URI avant forward_auth) : le backend doit voir
+	# l'URL d'origine /media/<conversation>/attachments/<fichier> dans X-Original-URL.
+	handle /media/* {
+		header Content-Security-Policy "default-src 'none'"
+		route {
+			forward_auth conversations-backend:8000 {
+				uri /api/v1.0/chats/media-auth/
+				header_up X-Original-URL {http.request.orig_uri}
+				copy_headers Authorization X-Amz-Date X-Amz-Content-SHA256
+			}
+			uri replace /media/ /conversations-storage/ 1
+			reverse_proxy s3:9000 {
+				header_up Host s3:9000
+				header_up -Cookie
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy conversations-frontend:8080
+	}
+}
