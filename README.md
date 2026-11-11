@@ -4,6 +4,10 @@
 
 StartKit fait tourner les applications de La Suite numérique sur ta machine : un portail pour les retrouver, un seul compte pour toutes, une seule commande pour tout lancer.
 
+> **Déployer sur un serveur (Coolify)** : voir [`coolify/README.md`](coolify/README.md).
+> Cette variante utilise de vrais domaines et des secrets générés, et n'inclut pas Tchap.
+
+
 Ce guide va du démarrage à l'utilisation de chaque application. Les détails techniques sont à la fin, dans « Pour les développeurs ».
 
 ## Sommaire

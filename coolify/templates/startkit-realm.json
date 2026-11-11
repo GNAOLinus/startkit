@@ -1,0 +1,346 @@
+{
+  "realm": "startkit",
+  "enabled": true,
+  "displayName": "StartKit",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": true,
+  "internationalizationEnabled": true,
+  "supportedLocales": [
+    "fr",
+    "en"
+  ],
+  "defaultLocale": "fr",
+  "clients": [
+    {
+      "clientId": "docs",
+      "name": "Docs",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_DOCS}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://docs.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://docs.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://docs.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://docs.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "meet",
+      "name": "Visio",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_MEET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://visio.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://visio.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://visio.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://visio.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "messages",
+      "name": "Messages",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_MESSAGES}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://messages.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://messages.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://messages.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://messages.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "projects",
+      "name": "Projets",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_PROJECTS}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://projects.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://projects.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://projects.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://projects.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "drive",
+      "name": "Fichiers",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_DRIVE}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://fichiers.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://fichiers.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://fichiers.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://fichiers.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "grist",
+      "name": "Grist",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_GRIST}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://grist.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://grist.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://grist.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://grist.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "transfers",
+      "name": "Transfers",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_TRANSFERS}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://transfers.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://transfers.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://transfers.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://transfers.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "conversations",
+      "name": "Assistant IA",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${CLIENT_SECRET_CONVERSATIONS}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://assistant.${DOMAIN}",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://assistant.${DOMAIN}/*"
+      ],
+      "webOrigins": [
+        "https://assistant.${DOMAIN}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://assistant.${DOMAIN}/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "user1",
+      "email": "user1@startkit.${DOMAIN}",
+      "emailVerified": true,
+      "firstName": "Camille",
+      "lastName": "Martin",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${DEMO_PASSWORD_USER1}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "user2",
+      "email": "user2@startkit.${DOMAIN}",
+      "emailVerified": true,
+      "firstName": "Alex",
+      "lastName": "Bernard",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${DEMO_PASSWORD_USER2}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "user3",
+      "email": "user3@startkit.${DOMAIN}",
+      "emailVerified": true,
+      "firstName": "Sacha",
+      "lastName": "Petit",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${DEMO_PASSWORD_USER3}",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

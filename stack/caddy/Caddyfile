@@ -16,7 +16,7 @@
 	}
 }
 
-http://startkit.localhost:8000 {
+http://startkit.{$DOMAIN:localhost}:8000 {
 	import status docs docs.localhost /
 	import status visio visio.localhost /
 	import status messages messages.localhost /
@@ -40,21 +40,21 @@ http://localhost:8000 {
 }
 
 # Keycloak partagé : connexion unique pour toutes les applications.
-http://auth.localhost:8000 {
+http://auth.{$DOMAIN:localhost}:8000 {
 	reverse_proxy keycloak:8080
 }
 
 # Boîte de réception de développement : tous les e-mails envoyés par les apps.
-http://mail.localhost:8000 {
+http://mail.{$DOMAIN:localhost}:8000 {
 	reverse_proxy mail:8025
 }
 
 # Stockage S3 (API) et sa console d'administration.
-http://s3.localhost:8000 {
+http://s3.{$DOMAIN:localhost}:8000 {
 	reverse_proxy s3:9000
 }
 
-http://s3-console.localhost:8000 {
+http://s3-console.{$DOMAIN:localhost}:8000 {
 	reverse_proxy s3:9001
 }
 

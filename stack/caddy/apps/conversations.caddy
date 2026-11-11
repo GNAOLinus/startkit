@@ -9,7 +9,7 @@
 #   le reste -> SPA (nginx de conversations-frontend).
 # Pas d'en-tête X-Forwarded-Proto https ici : le backend tourne en HTTP simple
 # (configuration Http, voir stack/apps/ia.yml).
-http://assistant.localhost:8000 {
+http://assistant.{$DOMAIN:localhost}:8000 {
 	handle /api/* {
 		reverse_proxy conversations-backend:8000 {
 			flush_interval -1

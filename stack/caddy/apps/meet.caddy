@@ -1,7 +1,7 @@
 # La Suite Meet (Visio).
 # Reproduit le routage de docker/files/production/default.conf.template du dépôt meet :
 # /api, /admin, /static -> backend Django ; tout le reste -> frontend (SPA nginx).
-http://visio.localhost:8000 {
+http://visio.{$DOMAIN:localhost}:8000 {
 	@meet_backend path /api* /admin* /static*
 	handle @meet_backend {
 		reverse_proxy meet-backend:8000
@@ -33,6 +33,6 @@ http://visio.localhost:8000 {
 }
 
 # Serveur LiveKit (signalisation HTTP + websocket ; Caddy relaie les websockets nativement).
-http://livekit.localhost:8000 {
+http://livekit.{$DOMAIN:localhost}:8000 {
 	reverse_proxy meet-livekit:7880
 }

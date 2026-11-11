@@ -5,6 +5,6 @@
 # backend, /media/ via auth_request au backend puis S3, /collaboration/ vers yhub
 # (websocket compris), le reste vers l'éditeur. Caddy relaie les websockets
 # nativement, sans délai d'inactivité.
-http://docs.localhost:8000 {
+http://docs.{$DOMAIN:localhost}:8000 {
 	reverse_proxy docs-frontend:8083
 }

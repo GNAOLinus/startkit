@@ -7,3 +7,7 @@ synapse-data/
 
 # secrets locaux : seuls les .env.example sont versionnés
 stack/env/*.env
+
+# déploiement Coolify : secrets et fichiers générés par coolify/prepare.sh
+coolify/coolify.env
+coolify/generated/

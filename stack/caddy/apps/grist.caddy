@@ -1,3 +1,3 @@
-http://grist.localhost:8000 {
+http://grist.{$DOMAIN:localhost}:8000 {
 	reverse_proxy grist:8484
 }

@@ -19,3 +19,13 @@ include:
   - stack/apps/ia.yml
   # Ta stack Tchap (Synapse + MAS + Dex + front en mode dev), inchangée.
   - tchap/tchap-local-stack/docker-compose.yml
+
+services:
+  # Média WebRTC de Visio, publié sur la boucle locale uniquement.
+  # node_ip=127.0.0.1 dans stack/meet/livekit.yaml : les candidats ICE annoncés
+  # pointent sur la machine locale, donc un navigateur local se connecte en direct.
+  # Pour un déploiement distant, voir coolify/compose.yml.
+  meet-livekit:
+    ports:
+      - "127.0.0.1:7881:7881/tcp"
+      - "127.0.0.1:7882:7882/udp"

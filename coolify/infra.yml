@@ -1,0 +1,140 @@
+# Infrastructure partagée — version déploiement distant (Coolify).
+#
+# Différences avec stack/infra.yml (version locale) :
+#   - tous les identifiants viennent de coolify/generated/*.env, générés par
+#     coolify/prepare.sh (aucune valeur secrète dans ce fichier) ;
+#   - Keycloak tourne en mode `start` (production) et non `start-dev` ;
+#   - le realm est importé depuis coolify/generated/startkit-realm.json ;
+#   - le schéma PostgreSQL est importé depuis coolify/generated/init.sql.
+#
+# Le port 8000 du proxy est celui que Coolify doit router (voir coolify/README.md).
+
+services:
+  # Point d'entrée unique. Caddy route par sous-domaine ; les alias réseau
+  # gardent les mêmes URL internes qu'en local (.localhost).
+  proxy:
+    image: caddy:2.10-alpine
+    ports:
+      - "8000:8000"
+    env_file: ./generated/proxy.env
+    volumes:
+      - ../stack/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../stack/caddy/apps:/etc/caddy/apps:ro
+      - ../stack/portal:/srv/portal:ro
+    networks:
+      default:
+        aliases:
+          - startkit.localhost
+          - auth.localhost
+          - mail.localhost
+          - s3.localhost
+          - s3-console.localhost
+          - docs.localhost
+          - visio.localhost
+          - livekit.localhost
+          - messages.localhost
+          - projects.localhost
+          - fichiers.localhost
+          - grist.localhost
+          - transfers.localhost
+          - assistant.localhost
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    env_file: ./generated/infra.env
+    volumes:
+      - ./generated/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  s3:
+    image: pgsty/silo
+    env_file: ./generated/s3.env
+    command: server --console-address :9001 /data
+    volumes:
+      - s3-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 20s
+      retries: 60
+    restart: unless-stopped
+
+  # Crée les buckets de toutes les apps puis s'arrête.
+  # `$$` est échappé pour que le shell du conteneur lise les variables d'env.
+  s3-init:
+    image: pgsty/mc
+    env_file: ./generated/s3.env
+    depends_on:
+      s3:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+      mc alias set local http://s3:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" &&
+      mc mb --ignore-existing local/docs-media-storage &&
+      mc version enable local/docs-media-storage &&
+      mc mb --ignore-existing local/docs-yhub-storage &&
+      mc version enable local/docs-yhub-storage &&
+      mc mb --ignore-existing local/meet-recordings &&
+      mc mb --ignore-existing local/messages-storage &&
+      mc mb --ignore-existing local/projects-storage &&
+      mc mb --ignore-existing local/drive-media-storage &&
+      mc version enable local/drive-media-storage &&
+      mc mb --ignore-existing local/grist-docs &&
+      mc version enable local/grist-docs &&
+      mc mb --ignore-existing local/transfers-storage &&
+      mc mb --ignore-existing local/conversations-storage &&
+      exit 0;"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    # `start` (et non `start-dev`) : mode production, pas de valeurs par défaut.
+    command: ["start", "--import-realm", "--health-enabled=true"]
+    env_file: ./generated/keycloak.env
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      JAVA_OPTS_APPEND: -Xms256m -Xmx768m
+    volumes:
+      - ./generated/startkit-realm.json:/opt/keycloak/data/import/startkit-realm.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    restart: unless-stopped
+
+  # Boîte de réception de test (mailpit). En production, brancher un vrai SMTP :
+  # voir coolify/README.md.
+  mail:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  s3-data:

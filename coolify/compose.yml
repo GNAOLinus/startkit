@@ -1,0 +1,39 @@
+# StartKit — déploiement distant via Coolify.
+#
+# Ce fichier est le point d'entrée à déclarer dans Coolify :
+#   Base Directory : /coolify
+#   Docker Compose Location : /compose.yml
+#
+# Avant le premier déploiement, `bash coolify/prepare.sh` doit avoir généré :
+#   - stack/env/*.env            (config des applications, domaines réels)
+#   - coolify/generated/*        (realm, livekit, init.sql, identifiants)
+# Voir coolify/README.md.
+#
+# Différences avec le compose.yml racine (développement local) :
+#   - infrastructure dédiée à la production (coolify/infra.yml) ;
+#   - Tchap n'est pas inclus (sa stack locale est en mode développement) ;
+#   - LiveKit publie ses ports média sur Internet (visio à distance).
+
+name: startkit
+
+include:
+  - infra.yml
+  - ../stack/apps/projects.yml
+  - ../stack/apps/meet.yml
+  - ../stack/apps/messages.yml
+  - ../stack/apps/docs.yml
+  - ../stack/apps/grist.yml
+  - ../stack/apps/drive.yml
+  - ../stack/apps/transfers.yml
+  - ../stack/apps/ia.yml
+
+services:
+  # Média WebRTC de Visio : config générée (IP publique) et ports ouverts
+  # sur Internet. 7881/tcp et 7882/udp doivent aussi être autorisés dans le
+  # pare-feu du serveur.
+  meet-livekit:
+    volumes:
+      - ./generated/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7881:7881/tcp"
+      - "7882:7882/udp"

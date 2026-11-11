@@ -5,6 +5,6 @@
 # S3, le reste vers l'interface.
 # Les envois de fichiers ne passent pas par ici : le navigateur les dépose directement
 # sur http://s3.localhost:8000 (URL présignée), voir le site s3.localhost du Caddyfile.
-http://fichiers.localhost:8000 {
+http://fichiers.{$DOMAIN:localhost}:8000 {
 	reverse_proxy drive-frontend:8083
 }

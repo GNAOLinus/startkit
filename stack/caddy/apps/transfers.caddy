@@ -6,7 +6,7 @@
 # (configuration Http, voir stack/apps/transfers.yml).
 # Les fichiers ne passent pas par ici : le navigateur les envoie et les relit
 # directement sur http://s3.localhost:8000 (URL présignées).
-http://transfers.localhost:8000 {
+http://transfers.{$DOMAIN:localhost}:8000 {
 	@transfers_backend path /api/* /admin /admin/* /static/* /__heartbeat__/*
 	handle @transfers_backend {
 		reverse_proxy transfers-backend:8000
