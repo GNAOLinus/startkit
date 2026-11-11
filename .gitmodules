@@ -1,0 +1,18 @@
+[submodule "suitenumerique-projects"]
+	path = suitenumerique-projects
+	url = https://github.com/GNAOLinus/suitenumerique-projects.git
+[submodule "suitenumerique-messages"]
+	path = suitenumerique-messages
+	url = https://github.com/GNAOLinus/suitenumerique-messages.git
+[submodule "suitenumerique-meet"]
+	path = suitenumerique-meet
+	url = https://github.com/GNAOLinus/suitenumerique-meet.git
+[submodule "suitenumeriquedocs"]
+	path = suitenumeriquedocs
+	url = https://github.com/GNAOLinus/suitenumeriquedocs.git
+[submodule "tchap/tchap-web-v4"]
+	path = tchap/tchap-web-v4
+	url = https://github.com/tchapgouv/tchap-web-v4.git
+[submodule "tchap/synapse-tchap"]
+	path = tchap/synapse-tchap
+	url = https://github.com/tchapgouv/synapse-tchap.git
