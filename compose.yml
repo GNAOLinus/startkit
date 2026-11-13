@@ -25,7 +25,20 @@ services:
   # node_ip=127.0.0.1 dans stack/meet/livekit.yaml : les candidats ICE annoncés
   # pointent sur la machine locale, donc un navigateur local se connecte en direct.
   # Pour un déploiement distant, voir coolify/compose.yml.
+  #
+  # Définition complète (et non un simple ajout de ports) : certains outils
+  # d'orchestration, dont Coolify, ne fusionnent pas toujours le service redéfini
+  # avec celui de stack/apps/meet.yml — un service partiel donne alors
+  # « meet-livekit has neither an image nor a build context specified ».
   meet-livekit:
+    image: livekit/livekit-server:v1.13.10
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./stack/meet/livekit.yaml:/etc/livekit.yaml:ro
     ports:
       - "127.0.0.1:7881:7881/tcp"
       - "127.0.0.1:7882:7882/udp"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
