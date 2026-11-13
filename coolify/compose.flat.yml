@@ -1,0 +1,2189 @@
+# ATTENTION : fichier généré par `python3 coolify/flatten.py`, ne pas éditer.
+#
+# Source : coolify/compose.yml (+ les fichiers qu'il inclut).
+# Cible  : ressource Coolify « Docker Compose »
+#            Base Directory ............ /
+#            Docker Compose Location ... /coolify/compose.flat.yml
+#
+# Coolify ne résout pas `include:` et remplace les `env_file:` des services par
+# un `.env` commun : ce fichier est donc aplati et les `env_file:` y sont
+# convertis en `environment:` référençant les variables Coolify prefixées
+# (${MEET_DB_NAME?}, …). Le bloc de valeurs à coller dans Coolify est produit
+# par `bash coolify/prepare.sh` : coolify/generated/variables-coolify.env.
+
+name: startkit
+services:
+  proxy:
+    image: caddy:2.10-alpine
+    ports:
+    - 8000:8000
+    volumes:
+    - ./stack/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    - ./stack/caddy/apps:/etc/caddy/apps:ro
+    - ./stack/portal:/srv/portal:ro
+    networks:
+      default:
+        aliases:
+        - startkit.localhost
+        - auth.localhost
+        - mail.localhost
+        - s3.localhost
+        - s3-console.localhost
+        - docs.localhost
+        - visio.localhost
+        - livekit.localhost
+        - messages.localhost
+        - projects.localhost
+        - fichiers.localhost
+        - grist.localhost
+        - transfers.localhost
+        - assistant.localhost
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${PROXY_DOMAIN?}
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+    - ./coolify/generated/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U postgres
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${INFRA_POSTGRES_PASSWORD?}
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test:
+      - CMD
+      - redis-cli
+      - ping
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  s3:
+    image: pgsty/silo
+    command: server --console-address :9001 /data
+    volumes:
+    - s3-data:/data
+    healthcheck:
+      test:
+      - CMD
+      - mc
+      - ready
+      - local
+      interval: 2s
+      timeout: 20s
+      retries: 60
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${S3_MINIO_ROOT_USER?}
+      MINIO_ROOT_PASSWORD: ${S3_MINIO_ROOT_PASSWORD?}
+  s3-init:
+    image: pgsty/mc
+    depends_on:
+      s3:
+        condition: service_healthy
+    entrypoint: 'sh -c " mc alias set local http://s3:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" && mc mb --ignore-existing local/docs-media-storage && mc version enable local/docs-media-storage
+      && mc mb --ignore-existing local/docs-yhub-storage && mc version enable local/docs-yhub-storage && mc mb --ignore-existing local/meet-recordings && mc mb --ignore-existing local/messages-storage &&
+      mc mb --ignore-existing local/projects-storage && mc mb --ignore-existing local/drive-media-storage && mc version enable local/drive-media-storage && mc mb --ignore-existing local/grist-docs && mc
+      version enable local/grist-docs && mc mb --ignore-existing local/transfers-storage && mc mb --ignore-existing local/conversations-storage && exit 0;"
+
+      '
+    environment:
+      MINIO_ROOT_USER: ${S3_MINIO_ROOT_USER?}
+      MINIO_ROOT_PASSWORD: ${S3_MINIO_ROOT_PASSWORD?}
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command:
+    - start
+    - --import-realm
+    - --health-enabled=true
+    environment:
+      KC_DB_PASSWORD: ${KEYCLOAK_KC_DB_PASSWORD?}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_KC_BOOTSTRAP_ADMIN_USERNAME?}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_KC_BOOTSTRAP_ADMIN_PASSWORD?}
+      KC_HOSTNAME: ${KEYCLOAK_KC_HOSTNAME?}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_HTTP_ENABLED: 'true'
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: 'true'
+      JAVA_OPTS_APPEND: -Xms256m -Xmx768m
+    volumes:
+    - ./coolify/generated/startkit-realm.json:/opt/keycloak/data/import/startkit-realm.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - 'exec 3<>/dev/tcp/127.0.0.1/9000 && printf ''GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'' >&3 && grep -q UP <&3'
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    restart: unless-stopped
+  mail:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+  projects-app:
+    image: lasuite/projects:1.27.13
+    volumes:
+    - projects-user-avatars:/app/public/user-avatars
+    - projects-background-images:/app/public/project-background-images
+    - projects-attachments:/app/private/attachments
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      BASE_URL: ${PROJECTS_BASE_URL?}
+      DATABASE_URL: ${PROJECTS_DATABASE_URL?}
+      SECRET_KEY: ${PROJECTS_SECRET_KEY?}
+      TRUST_PROXY: ${PROJECTS_TRUST_PROXY?}
+      TZ: ${PROJECTS_TZ?}
+      OIDC_ISSUER: ${PROJECTS_OIDC_ISSUER?}
+      OIDC_CLIENT_ID: ${PROJECTS_OIDC_CLIENT_ID?}
+      OIDC_CLIENT_SECRET: ${PROJECTS_OIDC_CLIENT_SECRET?}
+      OIDC_ENFORCED: ${PROJECTS_OIDC_ENFORCED?}
+      OIDC_SCOPES: ${PROJECTS_OIDC_SCOPES?}
+      OIDC_USE_DEFAULT_RESPONSE_MODE: ${PROJECTS_OIDC_USE_DEFAULT_RESPONSE_MODE?}
+      OIDC_CLAIMS_SOURCE: ${PROJECTS_OIDC_CLAIMS_SOURCE?}
+      OIDC_EMAIL_ATTRIBUTE: ${PROJECTS_OIDC_EMAIL_ATTRIBUTE?}
+      OIDC_FULLNAME_ATTRIBUTES: ${PROJECTS_OIDC_FULLNAME_ATTRIBUTES?}
+      OIDC_IGNORE_USERNAME: ${PROJECTS_OIDC_IGNORE_USERNAME?}
+      OIDC_IGNORE_ROLES: ${PROJECTS_OIDC_IGNORE_ROLES?}
+      ALLOW_ALL_TO_CREATE_PROJECTS: ${PROJECTS_ALLOW_ALL_TO_CREATE_PROJECTS?}
+      DEFAULT_LANGUAGE: ${PROJECTS_DEFAULT_LANGUAGE?}
+      DISABLE_INDEXING: ${PROJECTS_DISABLE_INDEXING?}
+      DEFAULT_ADMIN_EMAIL: ${PROJECTS_DEFAULT_ADMIN_EMAIL?}
+      DEFAULT_ADMIN_NAME: ${PROJECTS_DEFAULT_ADMIN_NAME?}
+      SMTP_HOST: ${PROJECTS_SMTP_HOST?}
+      SMTP_PORT: ${PROJECTS_SMTP_PORT?}
+      SMTP_SECURE: ${PROJECTS_SMTP_SECURE?}
+      SMTP_FROM: ${PROJECTS_SMTP_FROM?}
+  meet-migrate:
+    image: lasuite/meet-backend:v1.37.0
+    configs:
+    - source: meet-settings-http
+      target: /app/meet/settings_http.py
+    command:
+    - sh
+    - -c
+    - 'python manage.py migrate --noinput && python manage.py createsuperuser --email admin@startkit.localhost --password admin
+
+      '
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: 'no'
+    environment:
+      DJANGO_SETTINGS_MODULE: ${MEET_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${MEET_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${MEET_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${MEET_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${MEET_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${MEET_DJANGO_CORS_ALLOWED_ORIGINS?}
+      DJANGO_SILENCED_SYSTEM_CHECKS: ${MEET_DJANGO_SILENCED_SYSTEM_CHECKS?}
+      PYTHONPATH: ${MEET_PYTHONPATH?}
+      DB_HOST: ${MEET_DB_HOST?}
+      DB_PORT: ${MEET_DB_PORT?}
+      DB_NAME: ${MEET_DB_NAME?}
+      DB_USER: ${MEET_DB_USER?}
+      DB_PASSWORD: ${MEET_DB_PASSWORD?}
+      REDIS_URL: ${MEET_REDIS_URL?}
+      CELERY_BROKER_URL: ${MEET_CELERY_BROKER_URL?}
+      CELERY_ENABLED: ${MEET_CELERY_ENABLED?}
+      STORAGES_STATICFILES_BACKEND: ${MEET_STORAGES_STATICFILES_BACKEND?}
+      AWS_S3_ENDPOINT_URL: ${MEET_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_ACCESS_KEY_ID: ${MEET_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${MEET_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${MEET_AWS_S3_REGION_NAME?}
+      AWS_STORAGE_BUCKET_NAME: ${MEET_AWS_STORAGE_BUCKET_NAME?}
+      FILE_UPLOAD_ENABLED: ${MEET_FILE_UPLOAD_ENABLED?}
+      APPLICATION_BASE_URL: ${MEET_APPLICATION_BASE_URL?}
+      DJANGO_EMAIL_HOST: ${MEET_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${MEET_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${MEET_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${MEET_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${MEET_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${MEET_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_SUPPORT_EMAIL: ${MEET_DJANGO_EMAIL_SUPPORT_EMAIL?}
+      DJANGO_EMAIL_LOGO_IMG: ${MEET_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_DOMAIN: ${MEET_DJANGO_EMAIL_DOMAIN?}
+      DJANGO_EMAIL_APP_BASE_URL: ${MEET_DJANGO_EMAIL_APP_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${MEET_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${MEET_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${MEET_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${MEET_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${MEET_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_OP_URL: ${MEET_OIDC_OP_URL?}
+      OIDC_RP_CLIENT_ID: ${MEET_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${MEET_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${MEET_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${MEET_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${MEET_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${MEET_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${MEET_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${MEET_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${MEET_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${MEET_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${MEET_LOGOUT_REDIRECT_URL?}
+      LIVEKIT_API_KEY: ${MEET_LIVEKIT_API_KEY?}
+      LIVEKIT_API_SECRET: ${MEET_LIVEKIT_API_SECRET?}
+      LIVEKIT_API_URL: ${MEET_LIVEKIT_API_URL?}
+      LIVEKIT_VERIFY_SSL: ${MEET_LIVEKIT_VERIFY_SSL?}
+      LIVEKIT_FORCE_WSS_PROTOCOL: ${MEET_LIVEKIT_FORCE_WSS_PROTOCOL?}
+      ALLOW_UNREGISTERED_ROOMS: ${MEET_ALLOW_UNREGISTERED_ROOMS?}
+      RECORDING_ENABLE: ${MEET_RECORDING_ENABLE?}
+      RECORDING_DOWNLOAD_BASE_URL: ${MEET_RECORDING_DOWNLOAD_BASE_URL?}
+      ROOM_SUBTITLE_ENABLED: ${MEET_ROOM_SUBTITLE_ENABLED?}
+      METADATA_COLLECTOR_ENABLED: ${MEET_METADATA_COLLECTOR_ENABLED?}
+      ROOM_TELEPHONY_ENABLED: ${MEET_ROOM_TELEPHONY_ENABLED?}
+      EXTERNAL_API_ENABLED: ${MEET_EXTERNAL_API_ENABLED?}
+      ADDONS_ENABLED: ${MEET_ADDONS_ENABLED?}
+      CONNECTION_TEST_ENABLED: ${MEET_CONNECTION_TEST_ENABLED?}
+      FRONTEND_USE_FRENCH_GOV_FOOTER: ${MEET_FRONTEND_USE_FRENCH_GOV_FOOTER?}
+      FRONTEND_USE_PROCONNECT_BUTTON: ${MEET_FRONTEND_USE_PROCONNECT_BUTTON?}
+      FRONTEND_SILENCE_LIVEKIT_DEBUG: ${MEET_FRONTEND_SILENCE_LIVEKIT_DEBUG?}
+  meet-backend:
+    image: lasuite/meet-backend:v1.37.0
+    configs:
+    - source: meet-settings-http
+      target: /app/meet/settings_http.py
+    command:
+    - gunicorn
+    - -c
+    - /usr/local/etc/gunicorn/meet.py
+    - --workers=2
+    - meet.wsgi:application
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      meet-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meet-livekit:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${MEET_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${MEET_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${MEET_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${MEET_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${MEET_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${MEET_DJANGO_CORS_ALLOWED_ORIGINS?}
+      DJANGO_SILENCED_SYSTEM_CHECKS: ${MEET_DJANGO_SILENCED_SYSTEM_CHECKS?}
+      PYTHONPATH: ${MEET_PYTHONPATH?}
+      DB_HOST: ${MEET_DB_HOST?}
+      DB_PORT: ${MEET_DB_PORT?}
+      DB_NAME: ${MEET_DB_NAME?}
+      DB_USER: ${MEET_DB_USER?}
+      DB_PASSWORD: ${MEET_DB_PASSWORD?}
+      REDIS_URL: ${MEET_REDIS_URL?}
+      CELERY_BROKER_URL: ${MEET_CELERY_BROKER_URL?}
+      CELERY_ENABLED: ${MEET_CELERY_ENABLED?}
+      STORAGES_STATICFILES_BACKEND: ${MEET_STORAGES_STATICFILES_BACKEND?}
+      AWS_S3_ENDPOINT_URL: ${MEET_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_ACCESS_KEY_ID: ${MEET_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${MEET_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${MEET_AWS_S3_REGION_NAME?}
+      AWS_STORAGE_BUCKET_NAME: ${MEET_AWS_STORAGE_BUCKET_NAME?}
+      FILE_UPLOAD_ENABLED: ${MEET_FILE_UPLOAD_ENABLED?}
+      APPLICATION_BASE_URL: ${MEET_APPLICATION_BASE_URL?}
+      DJANGO_EMAIL_HOST: ${MEET_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${MEET_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${MEET_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${MEET_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${MEET_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${MEET_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_SUPPORT_EMAIL: ${MEET_DJANGO_EMAIL_SUPPORT_EMAIL?}
+      DJANGO_EMAIL_LOGO_IMG: ${MEET_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_DOMAIN: ${MEET_DJANGO_EMAIL_DOMAIN?}
+      DJANGO_EMAIL_APP_BASE_URL: ${MEET_DJANGO_EMAIL_APP_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${MEET_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${MEET_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${MEET_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${MEET_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${MEET_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_OP_URL: ${MEET_OIDC_OP_URL?}
+      OIDC_RP_CLIENT_ID: ${MEET_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${MEET_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${MEET_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${MEET_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${MEET_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${MEET_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${MEET_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${MEET_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${MEET_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${MEET_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${MEET_LOGOUT_REDIRECT_URL?}
+      LIVEKIT_API_KEY: ${MEET_LIVEKIT_API_KEY?}
+      LIVEKIT_API_SECRET: ${MEET_LIVEKIT_API_SECRET?}
+      LIVEKIT_API_URL: ${MEET_LIVEKIT_API_URL?}
+      LIVEKIT_VERIFY_SSL: ${MEET_LIVEKIT_VERIFY_SSL?}
+      LIVEKIT_FORCE_WSS_PROTOCOL: ${MEET_LIVEKIT_FORCE_WSS_PROTOCOL?}
+      ALLOW_UNREGISTERED_ROOMS: ${MEET_ALLOW_UNREGISTERED_ROOMS?}
+      RECORDING_ENABLE: ${MEET_RECORDING_ENABLE?}
+      RECORDING_DOWNLOAD_BASE_URL: ${MEET_RECORDING_DOWNLOAD_BASE_URL?}
+      ROOM_SUBTITLE_ENABLED: ${MEET_ROOM_SUBTITLE_ENABLED?}
+      METADATA_COLLECTOR_ENABLED: ${MEET_METADATA_COLLECTOR_ENABLED?}
+      ROOM_TELEPHONY_ENABLED: ${MEET_ROOM_TELEPHONY_ENABLED?}
+      EXTERNAL_API_ENABLED: ${MEET_EXTERNAL_API_ENABLED?}
+      ADDONS_ENABLED: ${MEET_ADDONS_ENABLED?}
+      CONNECTION_TEST_ENABLED: ${MEET_CONNECTION_TEST_ENABLED?}
+      FRONTEND_USE_FRENCH_GOV_FOOTER: ${MEET_FRONTEND_USE_FRENCH_GOV_FOOTER?}
+      FRONTEND_USE_PROCONNECT_BUTTON: ${MEET_FRONTEND_USE_PROCONNECT_BUTTON?}
+      FRONTEND_SILENCE_LIVEKIT_DEBUG: ${MEET_FRONTEND_SILENCE_LIVEKIT_DEBUG?}
+  meet-frontend:
+    image: lasuite/meet-frontend:v1.37.0
+    depends_on:
+      meet-backend:
+        condition: service_healthy
+    restart: unless-stopped
+  meet-livekit:
+    image: livekit/livekit-server:v1.13.10
+    command:
+    - --config
+    - /etc/livekit.yaml
+    volumes:
+    - ./coolify/generated/livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+    - 7881:7881/tcp
+    - 7882:7882/udp
+  meet-egress:
+    image: livekit/egress:v1.15.0
+    profiles:
+    - recording
+    network_mode: service:meet-livekit
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    configs:
+    - source: meet-egress-config
+      target: /etc/egress.yaml
+    cap_add:
+    - SYS_ADMIN
+    depends_on:
+      meet-livekit:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  messages-migrate:
+    image: ghcr.io/suitenumerique/messages-backend:0.10.0
+    configs:
+    - source: messages-settings-http
+      target: /app/messages/settings_http.py
+    - source: messages-bootstrap
+      target: /startkit/messages-bootstrap.py
+    command:
+    - sh
+    - -c
+    - 'python manage.py migrate --noinput && python manage.py create_bucket --storage message-imports --expire-days 7 && python manage.py create_bucket --storage message-blobs && python manage.py search_index_create
+      && python manage.py createsuperuser --email admin@startkit.localhost --password admin && python manage.py shell < /startkit/messages-bootstrap.py
+
+      '
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+      messages-opensearch:
+        condition: service_healthy
+    restart: 'no'
+    environment:
+      DJANGO_SETTINGS_MODULE: ${MESSAGES_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${MESSAGES_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${MESSAGES_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${MESSAGES_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${MESSAGES_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      INSTANCE_URL: ${MESSAGES_INSTANCE_URL?}
+      PYTHONPATH: ${MESSAGES_PYTHONPATH?}
+      GUNICORN_CMD_ARGS: ${MESSAGES_GUNICORN_CMD_ARGS?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${MESSAGES_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${MESSAGES_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${MESSAGES_LOGGING_LEVEL_LOGGERS_APP?}
+      SALT_KEY: ${MESSAGES_SALT_KEY?}
+      DB_HOST: ${MESSAGES_DB_HOST?}
+      DB_PORT: ${MESSAGES_DB_PORT?}
+      DB_NAME: ${MESSAGES_DB_NAME?}
+      DB_USER: ${MESSAGES_DB_USER?}
+      DB_PASSWORD: ${MESSAGES_DB_PASSWORD?}
+      REDIS_URL: ${MESSAGES_REDIS_URL?}
+      CELERY_BROKER_URL: ${MESSAGES_CELERY_BROKER_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${MESSAGES_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${MESSAGES_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${MESSAGES_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${MESSAGES_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${MESSAGES_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${MESSAGES_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${MESSAGES_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${MESSAGES_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${MESSAGES_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${MESSAGES_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${MESSAGES_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      LOGIN_REDIRECT_URL: ${MESSAGES_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${MESSAGES_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${MESSAGES_LOGOUT_REDIRECT_URL?}
+      OIDC_CREATE_USER: ${MESSAGES_OIDC_CREATE_USER?}
+      AWS_S3_ENDPOINT_URL: ${MESSAGES_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${MESSAGES_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${MESSAGES_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${MESSAGES_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${MESSAGES_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${MESSAGES_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${MESSAGES_AWS_STORAGE_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_IMPORTS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ACCESS_KEY?}
+      STORAGE_MESSAGE_IMPORTS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_SECRET_KEY?}
+      STORAGE_MESSAGE_IMPORTS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_REGION_NAME?}
+      STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY?}
+      STORAGE_MESSAGE_BLOBS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_BLOBS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_BUCKET_NAME?}
+      STORAGE_MESSAGE_BLOBS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ACCESS_KEY?}
+      STORAGE_MESSAGE_BLOBS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_SECRET_KEY?}
+      STORAGE_MESSAGE_BLOBS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_REGION_NAME?}
+      OPENSEARCH_URL: ${MESSAGES_OPENSEARCH_URL?}
+      OPENSEARCH_INDEX_THREADS: ${MESSAGES_OPENSEARCH_INDEX_THREADS?}
+      MTA_OUT_MODE: ${MESSAGES_MTA_OUT_MODE?}
+      MTA_OUT_RELAY_HOST: ${MESSAGES_MTA_OUT_RELAY_HOST?}
+      MTA_OUT_SMTP_TLS_SECURITY_LEVEL: ${MESSAGES_MTA_OUT_SMTP_TLS_SECURITY_LEVEL?}
+      MESSAGES_TECHNICAL_DOMAIN: ${MESSAGES_MESSAGES_TECHNICAL_DOMAIN?}
+      MESSAGES_ALLOW_INTERNAL_DELIVERY: ${MESSAGES_MESSAGES_ALLOW_INTERNAL_DELIVERY?}
+      SPAM_CONFIG: ${MESSAGES_SPAM_CONFIG?}
+      MDA_API_SECRET: ${MESSAGES_MDA_API_SECRET?}
+      MESSAGES_SELFCHECK_SECRET: ${MESSAGES_MESSAGES_SELFCHECK_SECRET?}
+      MDA_API_BASE_URL: ${MESSAGES_MDA_API_BASE_URL?}
+      PYMTA_SMTP_HOSTNAME: ${MESSAGES_PYMTA_SMTP_HOSTNAME?}
+      PYMTA_SMTP_BIND_PORT: ${MESSAGES_PYMTA_SMTP_BIND_PORT?}
+      PYMTA_LOG_LEVEL: ${MESSAGES_PYMTA_LOG_LEVEL?}
+      FEATURE_AI_SUMMARY: ${MESSAGES_FEATURE_AI_SUMMARY?}
+      FEATURE_AI_AUTOLABELS: ${MESSAGES_FEATURE_AI_AUTOLABELS?}
+      ENABLE_PROMETHEUS: ${MESSAGES_ENABLE_PROMETHEUS?}
+  messages-backend:
+    image: ghcr.io/suitenumerique/messages-backend:0.10.0
+    configs:
+    - source: messages-settings-http
+      target: /app/messages/settings_http.py
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://localhost:8000/__heartbeat__/', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      messages-migrate:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      messages-opensearch:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${MESSAGES_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${MESSAGES_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${MESSAGES_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${MESSAGES_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${MESSAGES_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      INSTANCE_URL: ${MESSAGES_INSTANCE_URL?}
+      PYTHONPATH: ${MESSAGES_PYTHONPATH?}
+      GUNICORN_CMD_ARGS: ${MESSAGES_GUNICORN_CMD_ARGS?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${MESSAGES_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${MESSAGES_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${MESSAGES_LOGGING_LEVEL_LOGGERS_APP?}
+      SALT_KEY: ${MESSAGES_SALT_KEY?}
+      DB_HOST: ${MESSAGES_DB_HOST?}
+      DB_PORT: ${MESSAGES_DB_PORT?}
+      DB_NAME: ${MESSAGES_DB_NAME?}
+      DB_USER: ${MESSAGES_DB_USER?}
+      DB_PASSWORD: ${MESSAGES_DB_PASSWORD?}
+      REDIS_URL: ${MESSAGES_REDIS_URL?}
+      CELERY_BROKER_URL: ${MESSAGES_CELERY_BROKER_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${MESSAGES_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${MESSAGES_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${MESSAGES_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${MESSAGES_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${MESSAGES_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${MESSAGES_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${MESSAGES_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${MESSAGES_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${MESSAGES_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${MESSAGES_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${MESSAGES_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      LOGIN_REDIRECT_URL: ${MESSAGES_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${MESSAGES_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${MESSAGES_LOGOUT_REDIRECT_URL?}
+      OIDC_CREATE_USER: ${MESSAGES_OIDC_CREATE_USER?}
+      AWS_S3_ENDPOINT_URL: ${MESSAGES_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${MESSAGES_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${MESSAGES_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${MESSAGES_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${MESSAGES_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${MESSAGES_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${MESSAGES_AWS_STORAGE_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_IMPORTS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ACCESS_KEY?}
+      STORAGE_MESSAGE_IMPORTS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_SECRET_KEY?}
+      STORAGE_MESSAGE_IMPORTS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_REGION_NAME?}
+      STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY?}
+      STORAGE_MESSAGE_BLOBS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_BLOBS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_BUCKET_NAME?}
+      STORAGE_MESSAGE_BLOBS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ACCESS_KEY?}
+      STORAGE_MESSAGE_BLOBS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_SECRET_KEY?}
+      STORAGE_MESSAGE_BLOBS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_REGION_NAME?}
+      OPENSEARCH_URL: ${MESSAGES_OPENSEARCH_URL?}
+      OPENSEARCH_INDEX_THREADS: ${MESSAGES_OPENSEARCH_INDEX_THREADS?}
+      MTA_OUT_MODE: ${MESSAGES_MTA_OUT_MODE?}
+      MTA_OUT_RELAY_HOST: ${MESSAGES_MTA_OUT_RELAY_HOST?}
+      MTA_OUT_SMTP_TLS_SECURITY_LEVEL: ${MESSAGES_MTA_OUT_SMTP_TLS_SECURITY_LEVEL?}
+      MESSAGES_TECHNICAL_DOMAIN: ${MESSAGES_MESSAGES_TECHNICAL_DOMAIN?}
+      MESSAGES_ALLOW_INTERNAL_DELIVERY: ${MESSAGES_MESSAGES_ALLOW_INTERNAL_DELIVERY?}
+      SPAM_CONFIG: ${MESSAGES_SPAM_CONFIG?}
+      MDA_API_SECRET: ${MESSAGES_MDA_API_SECRET?}
+      MESSAGES_SELFCHECK_SECRET: ${MESSAGES_MESSAGES_SELFCHECK_SECRET?}
+      MDA_API_BASE_URL: ${MESSAGES_MDA_API_BASE_URL?}
+      PYMTA_SMTP_HOSTNAME: ${MESSAGES_PYMTA_SMTP_HOSTNAME?}
+      PYMTA_SMTP_BIND_PORT: ${MESSAGES_PYMTA_SMTP_BIND_PORT?}
+      PYMTA_LOG_LEVEL: ${MESSAGES_PYMTA_LOG_LEVEL?}
+      FEATURE_AI_SUMMARY: ${MESSAGES_FEATURE_AI_SUMMARY?}
+      FEATURE_AI_AUTOLABELS: ${MESSAGES_FEATURE_AI_AUTOLABELS?}
+      ENABLE_PROMETHEUS: ${MESSAGES_ENABLE_PROMETHEUS?}
+  messages-worker:
+    image: ghcr.io/suitenumerique/messages-backend:0.10.0
+    configs:
+    - source: messages-settings-http
+      target: /app/messages/settings_http.py
+    command:
+    - python
+    - worker.py
+    - --concurrency=1
+    healthcheck:
+      disable: true
+    depends_on:
+      messages-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      messages-opensearch:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${MESSAGES_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${MESSAGES_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${MESSAGES_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${MESSAGES_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${MESSAGES_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      INSTANCE_URL: ${MESSAGES_INSTANCE_URL?}
+      PYTHONPATH: ${MESSAGES_PYTHONPATH?}
+      GUNICORN_CMD_ARGS: ${MESSAGES_GUNICORN_CMD_ARGS?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${MESSAGES_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${MESSAGES_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${MESSAGES_LOGGING_LEVEL_LOGGERS_APP?}
+      SALT_KEY: ${MESSAGES_SALT_KEY?}
+      DB_HOST: ${MESSAGES_DB_HOST?}
+      DB_PORT: ${MESSAGES_DB_PORT?}
+      DB_NAME: ${MESSAGES_DB_NAME?}
+      DB_USER: ${MESSAGES_DB_USER?}
+      DB_PASSWORD: ${MESSAGES_DB_PASSWORD?}
+      REDIS_URL: ${MESSAGES_REDIS_URL?}
+      CELERY_BROKER_URL: ${MESSAGES_CELERY_BROKER_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${MESSAGES_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${MESSAGES_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${MESSAGES_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${MESSAGES_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${MESSAGES_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${MESSAGES_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${MESSAGES_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${MESSAGES_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${MESSAGES_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${MESSAGES_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${MESSAGES_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      LOGIN_REDIRECT_URL: ${MESSAGES_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${MESSAGES_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${MESSAGES_LOGOUT_REDIRECT_URL?}
+      OIDC_CREATE_USER: ${MESSAGES_OIDC_CREATE_USER?}
+      AWS_S3_ENDPOINT_URL: ${MESSAGES_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${MESSAGES_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${MESSAGES_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${MESSAGES_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${MESSAGES_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${MESSAGES_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${MESSAGES_AWS_STORAGE_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_IMPORTS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ACCESS_KEY?}
+      STORAGE_MESSAGE_IMPORTS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_SECRET_KEY?}
+      STORAGE_MESSAGE_IMPORTS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_REGION_NAME?}
+      STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY?}
+      STORAGE_MESSAGE_BLOBS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_BLOBS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_BUCKET_NAME?}
+      STORAGE_MESSAGE_BLOBS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ACCESS_KEY?}
+      STORAGE_MESSAGE_BLOBS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_SECRET_KEY?}
+      STORAGE_MESSAGE_BLOBS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_REGION_NAME?}
+      OPENSEARCH_URL: ${MESSAGES_OPENSEARCH_URL?}
+      OPENSEARCH_INDEX_THREADS: ${MESSAGES_OPENSEARCH_INDEX_THREADS?}
+      MTA_OUT_MODE: ${MESSAGES_MTA_OUT_MODE?}
+      MTA_OUT_RELAY_HOST: ${MESSAGES_MTA_OUT_RELAY_HOST?}
+      MTA_OUT_SMTP_TLS_SECURITY_LEVEL: ${MESSAGES_MTA_OUT_SMTP_TLS_SECURITY_LEVEL?}
+      MESSAGES_TECHNICAL_DOMAIN: ${MESSAGES_MESSAGES_TECHNICAL_DOMAIN?}
+      MESSAGES_ALLOW_INTERNAL_DELIVERY: ${MESSAGES_MESSAGES_ALLOW_INTERNAL_DELIVERY?}
+      SPAM_CONFIG: ${MESSAGES_SPAM_CONFIG?}
+      MDA_API_SECRET: ${MESSAGES_MDA_API_SECRET?}
+      MESSAGES_SELFCHECK_SECRET: ${MESSAGES_MESSAGES_SELFCHECK_SECRET?}
+      MDA_API_BASE_URL: ${MESSAGES_MDA_API_BASE_URL?}
+      PYMTA_SMTP_HOSTNAME: ${MESSAGES_PYMTA_SMTP_HOSTNAME?}
+      PYMTA_SMTP_BIND_PORT: ${MESSAGES_PYMTA_SMTP_BIND_PORT?}
+      PYMTA_LOG_LEVEL: ${MESSAGES_PYMTA_LOG_LEVEL?}
+      FEATURE_AI_SUMMARY: ${MESSAGES_FEATURE_AI_SUMMARY?}
+      FEATURE_AI_AUTOLABELS: ${MESSAGES_FEATURE_AI_AUTOLABELS?}
+      ENABLE_PROMETHEUS: ${MESSAGES_ENABLE_PROMETHEUS?}
+  messages-frontend:
+    image: ghcr.io/suitenumerique/messages-frontend:0.10.0
+    environment:
+      MESSAGES_FRONTEND_BACKEND_SERVER: messages-backend:8000
+    depends_on:
+      messages-backend:
+        condition: service_healthy
+    restart: unless-stopped
+  messages-mta-in:
+    image: ghcr.io/suitenumerique/messages-mta-in-py:0.10.0
+    environment:
+      DJANGO_SETTINGS_MODULE: ${MESSAGES_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${MESSAGES_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${MESSAGES_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${MESSAGES_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${MESSAGES_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      INSTANCE_URL: ${MESSAGES_INSTANCE_URL?}
+      PYTHONPATH: /app/src
+      GUNICORN_CMD_ARGS: ${MESSAGES_GUNICORN_CMD_ARGS?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${MESSAGES_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${MESSAGES_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${MESSAGES_LOGGING_LEVEL_LOGGERS_APP?}
+      SALT_KEY: ${MESSAGES_SALT_KEY?}
+      DB_HOST: ${MESSAGES_DB_HOST?}
+      DB_PORT: ${MESSAGES_DB_PORT?}
+      DB_NAME: ${MESSAGES_DB_NAME?}
+      DB_USER: ${MESSAGES_DB_USER?}
+      DB_PASSWORD: ${MESSAGES_DB_PASSWORD?}
+      REDIS_URL: ${MESSAGES_REDIS_URL?}
+      CELERY_BROKER_URL: ${MESSAGES_CELERY_BROKER_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${MESSAGES_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${MESSAGES_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${MESSAGES_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${MESSAGES_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${MESSAGES_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${MESSAGES_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${MESSAGES_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${MESSAGES_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${MESSAGES_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${MESSAGES_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${MESSAGES_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      LOGIN_REDIRECT_URL: ${MESSAGES_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${MESSAGES_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${MESSAGES_LOGOUT_REDIRECT_URL?}
+      OIDC_CREATE_USER: ${MESSAGES_OIDC_CREATE_USER?}
+      AWS_S3_ENDPOINT_URL: ${MESSAGES_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${MESSAGES_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${MESSAGES_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${MESSAGES_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${MESSAGES_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${MESSAGES_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${MESSAGES_AWS_STORAGE_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_IMPORTS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_BUCKET_NAME?}
+      STORAGE_MESSAGE_IMPORTS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_ACCESS_KEY?}
+      STORAGE_MESSAGE_IMPORTS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_SECRET_KEY?}
+      STORAGE_MESSAGE_IMPORTS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_REGION_NAME?}
+      STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY: ${MESSAGES_STORAGE_MESSAGE_IMPORTS_EXPIRE_POLICY?}
+      STORAGE_MESSAGE_BLOBS_ENDPOINT_URL: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ENDPOINT_URL?}
+      STORAGE_MESSAGE_BLOBS_BUCKET_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_BUCKET_NAME?}
+      STORAGE_MESSAGE_BLOBS_ACCESS_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_ACCESS_KEY?}
+      STORAGE_MESSAGE_BLOBS_SECRET_KEY: ${MESSAGES_STORAGE_MESSAGE_BLOBS_SECRET_KEY?}
+      STORAGE_MESSAGE_BLOBS_REGION_NAME: ${MESSAGES_STORAGE_MESSAGE_BLOBS_REGION_NAME?}
+      OPENSEARCH_URL: ${MESSAGES_OPENSEARCH_URL?}
+      OPENSEARCH_INDEX_THREADS: ${MESSAGES_OPENSEARCH_INDEX_THREADS?}
+      MTA_OUT_MODE: ${MESSAGES_MTA_OUT_MODE?}
+      MTA_OUT_RELAY_HOST: ${MESSAGES_MTA_OUT_RELAY_HOST?}
+      MTA_OUT_SMTP_TLS_SECURITY_LEVEL: ${MESSAGES_MTA_OUT_SMTP_TLS_SECURITY_LEVEL?}
+      MESSAGES_TECHNICAL_DOMAIN: ${MESSAGES_MESSAGES_TECHNICAL_DOMAIN?}
+      MESSAGES_ALLOW_INTERNAL_DELIVERY: ${MESSAGES_MESSAGES_ALLOW_INTERNAL_DELIVERY?}
+      SPAM_CONFIG: ${MESSAGES_SPAM_CONFIG?}
+      MDA_API_SECRET: ${MESSAGES_MDA_API_SECRET?}
+      MESSAGES_SELFCHECK_SECRET: ${MESSAGES_MESSAGES_SELFCHECK_SECRET?}
+      MDA_API_BASE_URL: ${MESSAGES_MDA_API_BASE_URL?}
+      PYMTA_SMTP_HOSTNAME: ${MESSAGES_PYMTA_SMTP_HOSTNAME?}
+      PYMTA_SMTP_BIND_PORT: ${MESSAGES_PYMTA_SMTP_BIND_PORT?}
+      PYMTA_LOG_LEVEL: ${MESSAGES_PYMTA_LOG_LEVEL?}
+      FEATURE_AI_SUMMARY: ${MESSAGES_FEATURE_AI_SUMMARY?}
+      FEATURE_AI_AUTOLABELS: ${MESSAGES_FEATURE_AI_AUTOLABELS?}
+      ENABLE_PROMETHEUS: ${MESSAGES_ENABLE_PROMETHEUS?}
+    ports:
+    - '2525:25'
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    read_only: true
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    depends_on:
+      messages-backend:
+        condition: service_healthy
+    restart: unless-stopped
+  messages-opensearch:
+    image: opensearchproject/opensearch:2.19.2
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      DISABLE_INSTALL_DEMO_CONFIG: 'true'
+      DISABLE_SECURITY_PLUGIN: 'true'
+      cluster.routing.allocation.disk.threshold_enabled: 'false'
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+    - messages-opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - curl -fs http://localhost:9200/_cluster/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    restart: unless-stopped
+  docs-keys:
+    image: lasuite/impress-backend:v6.0.4
+    user: '0'
+    command:
+    - python
+    - -c
+    - "import os\nfrom cryptography.hazmat.primitives import serialization\nfrom cryptography.hazmat.primitives.asymmetric import rsa\nfor path in (\"/keys/backend/private.pem\", \"/keys/yhub/yhub-private.pem\"\
+      ):\n    if os.path.exists(path):\n        print(\"already there:\", path)\n        continue\n    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)\n    with open(path, \"wb\") as\
+      \ f:\n        f.write(key.private_bytes(\n            serialization.Encoding.PEM,\n            serialization.PrivateFormat.PKCS8,\n            serialization.NoEncryption(),\n        ))\n    os.chown(path,\
+      \ 1000, 1000)\n    os.chmod(path, 0o600)\n    print(\"created:\", path)\n"
+    volumes:
+    - docs-jwt-backend:/keys/backend
+    - docs-jwt-yhub:/keys/yhub
+    restart: 'no'
+  docs-migrate:
+    image: lasuite/impress-backend:v6.0.4
+    user: '1000'
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    volumes:
+    - docs-jwt-backend:/keys:ro
+    configs:
+    - source: docs-settings-http
+      target: /app/impress/settings_http.py
+    command:
+    - sh
+    - -c
+    - 'python manage.py migrate --no-input && python manage.py createsuperuser --email "$$DJANGO_SUPERUSER_EMAIL" --password "$$DJANGO_SUPERUSER_PASSWORD"
+
+      '
+    depends_on:
+      docs-keys:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: 'no'
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DOCS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${DOCS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${DOCS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${DOCS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DOCS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${DOCS_DJANGO_CORS_ALLOWED_ORIGINS?}
+      PYTHONPATH: ${DOCS_PYTHONPATH?}
+      WEB_CONCURRENCY: ${DOCS_WEB_CONCURRENCY?}
+      DJANGO_SUPERUSER_EMAIL: ${DOCS_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${DOCS_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${DOCS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${DOCS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${DOCS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${DOCS_DB_HOST?}
+      DB_PORT: ${DOCS_DB_PORT?}
+      DB_NAME: ${DOCS_DB_NAME?}
+      DB_USER: ${DOCS_DB_USER?}
+      DB_PASSWORD: ${DOCS_DB_PASSWORD?}
+      REDIS_URL: ${DOCS_REDIS_URL?}
+      DJANGO_CELERY_BROKER_URL: ${DOCS_DJANGO_CELERY_BROKER_URL?}
+      JWT_PRIVATE_KEY_FILE: ${DOCS_JWT_PRIVATE_KEY_FILE?}
+      YHUB_API_BASE_URL: ${DOCS_YHUB_API_BASE_URL?}
+      COLLABORATION_API_URL: ${DOCS_COLLABORATION_API_URL?}
+      COLLABORATION_WS_URL: ${DOCS_COLLABORATION_WS_URL?}
+      Y_PROVIDER_API_BASE_URL: ${DOCS_Y_PROVIDER_API_BASE_URL?}
+      Y_PROVIDER_API_KEY: ${DOCS_Y_PROVIDER_API_KEY?}
+      DJANGO_EMAIL_HOST: ${DOCS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${DOCS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${DOCS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${DOCS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${DOCS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${DOCS_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${DOCS_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_URL_APP: ${DOCS_DJANGO_EMAIL_URL_APP?}
+      AWS_S3_ENDPOINT_URL: ${DOCS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_ACCESS_KEY_ID: ${DOCS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${DOCS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${DOCS_AWS_S3_REGION_NAME?}
+      AWS_STORAGE_BUCKET_NAME: ${DOCS_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${DOCS_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${DOCS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${DOCS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${DOCS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${DOCS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${DOCS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${DOCS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${DOCS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${DOCS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${DOCS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${DOCS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${DOCS_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${DOCS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${DOCS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${DOCS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${DOCS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${DOCS_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${DOCS_FRONTEND_SILENT_LOGIN_ENABLED?}
+      AI_FEATURE_ENABLED: ${DOCS_AI_FEATURE_ENABLED?}
+      AI_FEATURE_LEGACY_ENABLED: ${DOCS_AI_FEATURE_LEGACY_ENABLED?}
+      AI_FEATURE_BLOCKNOTE_ENABLED: ${DOCS_AI_FEATURE_BLOCKNOTE_ENABLED?}
+      AI_BASE_URL: ${DOCS_AI_BASE_URL?}
+      AI_API_KEY: ${DOCS_AI_API_KEY?}
+      AI_MODEL: ${DOCS_AI_MODEL?}
+      AI_BOT: ${DOCS_AI_BOT?}
+      AI_ALLOW_REACH_FROM: ${DOCS_AI_ALLOW_REACH_FROM?}
+  docs-backend:
+    image: lasuite/impress-backend:v6.0.4
+    user: '1000'
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    volumes:
+    - docs-jwt-backend:/keys:ro
+    configs:
+    - source: docs-settings-http
+      target: /app/impress/settings_http.py
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      docs-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DOCS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${DOCS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${DOCS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${DOCS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DOCS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${DOCS_DJANGO_CORS_ALLOWED_ORIGINS?}
+      PYTHONPATH: ${DOCS_PYTHONPATH?}
+      WEB_CONCURRENCY: ${DOCS_WEB_CONCURRENCY?}
+      DJANGO_SUPERUSER_EMAIL: ${DOCS_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${DOCS_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${DOCS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${DOCS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${DOCS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${DOCS_DB_HOST?}
+      DB_PORT: ${DOCS_DB_PORT?}
+      DB_NAME: ${DOCS_DB_NAME?}
+      DB_USER: ${DOCS_DB_USER?}
+      DB_PASSWORD: ${DOCS_DB_PASSWORD?}
+      REDIS_URL: ${DOCS_REDIS_URL?}
+      DJANGO_CELERY_BROKER_URL: ${DOCS_DJANGO_CELERY_BROKER_URL?}
+      JWT_PRIVATE_KEY_FILE: ${DOCS_JWT_PRIVATE_KEY_FILE?}
+      YHUB_API_BASE_URL: ${DOCS_YHUB_API_BASE_URL?}
+      COLLABORATION_API_URL: ${DOCS_COLLABORATION_API_URL?}
+      COLLABORATION_WS_URL: ${DOCS_COLLABORATION_WS_URL?}
+      Y_PROVIDER_API_BASE_URL: ${DOCS_Y_PROVIDER_API_BASE_URL?}
+      Y_PROVIDER_API_KEY: ${DOCS_Y_PROVIDER_API_KEY?}
+      DJANGO_EMAIL_HOST: ${DOCS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${DOCS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${DOCS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${DOCS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${DOCS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${DOCS_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${DOCS_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_URL_APP: ${DOCS_DJANGO_EMAIL_URL_APP?}
+      AWS_S3_ENDPOINT_URL: ${DOCS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_ACCESS_KEY_ID: ${DOCS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${DOCS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${DOCS_AWS_S3_REGION_NAME?}
+      AWS_STORAGE_BUCKET_NAME: ${DOCS_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${DOCS_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${DOCS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${DOCS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${DOCS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${DOCS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${DOCS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${DOCS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${DOCS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${DOCS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${DOCS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${DOCS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${DOCS_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${DOCS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${DOCS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${DOCS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${DOCS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${DOCS_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${DOCS_FRONTEND_SILENT_LOGIN_ENABLED?}
+      AI_FEATURE_ENABLED: ${DOCS_AI_FEATURE_ENABLED?}
+      AI_FEATURE_LEGACY_ENABLED: ${DOCS_AI_FEATURE_LEGACY_ENABLED?}
+      AI_FEATURE_BLOCKNOTE_ENABLED: ${DOCS_AI_FEATURE_BLOCKNOTE_ENABLED?}
+      AI_BASE_URL: ${DOCS_AI_BASE_URL?}
+      AI_API_KEY: ${DOCS_AI_API_KEY?}
+      AI_MODEL: ${DOCS_AI_MODEL?}
+      AI_BOT: ${DOCS_AI_BOT?}
+      AI_ALLOW_REACH_FROM: ${DOCS_AI_ALLOW_REACH_FROM?}
+  docs-celery:
+    image: lasuite/impress-backend:v6.0.4
+    user: '1000'
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    volumes:
+    - docs-jwt-backend:/keys:ro
+    configs:
+    - source: docs-settings-http
+      target: /app/impress/settings_http.py
+    command:
+    - celery
+    - -A
+    - impress.celery_app
+    - worker
+    - -l
+    - INFO
+    - -n
+    - docs@%h
+    - --concurrency=1
+    depends_on:
+      docs-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DOCS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${DOCS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${DOCS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${DOCS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DOCS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${DOCS_DJANGO_CORS_ALLOWED_ORIGINS?}
+      PYTHONPATH: ${DOCS_PYTHONPATH?}
+      WEB_CONCURRENCY: ${DOCS_WEB_CONCURRENCY?}
+      DJANGO_SUPERUSER_EMAIL: ${DOCS_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${DOCS_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${DOCS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${DOCS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${DOCS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${DOCS_DB_HOST?}
+      DB_PORT: ${DOCS_DB_PORT?}
+      DB_NAME: ${DOCS_DB_NAME?}
+      DB_USER: ${DOCS_DB_USER?}
+      DB_PASSWORD: ${DOCS_DB_PASSWORD?}
+      REDIS_URL: ${DOCS_REDIS_URL?}
+      DJANGO_CELERY_BROKER_URL: ${DOCS_DJANGO_CELERY_BROKER_URL?}
+      JWT_PRIVATE_KEY_FILE: ${DOCS_JWT_PRIVATE_KEY_FILE?}
+      YHUB_API_BASE_URL: ${DOCS_YHUB_API_BASE_URL?}
+      COLLABORATION_API_URL: ${DOCS_COLLABORATION_API_URL?}
+      COLLABORATION_WS_URL: ${DOCS_COLLABORATION_WS_URL?}
+      Y_PROVIDER_API_BASE_URL: ${DOCS_Y_PROVIDER_API_BASE_URL?}
+      Y_PROVIDER_API_KEY: ${DOCS_Y_PROVIDER_API_KEY?}
+      DJANGO_EMAIL_HOST: ${DOCS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${DOCS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${DOCS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${DOCS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${DOCS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${DOCS_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${DOCS_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_URL_APP: ${DOCS_DJANGO_EMAIL_URL_APP?}
+      AWS_S3_ENDPOINT_URL: ${DOCS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_ACCESS_KEY_ID: ${DOCS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${DOCS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${DOCS_AWS_S3_REGION_NAME?}
+      AWS_STORAGE_BUCKET_NAME: ${DOCS_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${DOCS_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${DOCS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${DOCS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${DOCS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${DOCS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${DOCS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${DOCS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${DOCS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${DOCS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${DOCS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${DOCS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${DOCS_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${DOCS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${DOCS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${DOCS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${DOCS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${DOCS_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${DOCS_FRONTEND_SILENT_LOGIN_ENABLED?}
+      AI_FEATURE_ENABLED: ${DOCS_AI_FEATURE_ENABLED?}
+      AI_FEATURE_LEGACY_ENABLED: ${DOCS_AI_FEATURE_LEGACY_ENABLED?}
+      AI_FEATURE_BLOCKNOTE_ENABLED: ${DOCS_AI_FEATURE_BLOCKNOTE_ENABLED?}
+      AI_BASE_URL: ${DOCS_AI_BASE_URL?}
+      AI_API_KEY: ${DOCS_AI_API_KEY?}
+      AI_MODEL: ${DOCS_AI_MODEL?}
+      AI_BOT: ${DOCS_AI_BOT?}
+      AI_ALLOW_REACH_FROM: ${DOCS_AI_ALLOW_REACH_FROM?}
+  docs-yhub-init:
+    image: lasuite/impress-yhub:v6.0.4
+    user: '1000'
+    environment:
+      PORT: ${DOCS_YHUB_PORT?}
+      YHUB_ROLE: ${DOCS_YHUB_YHUB_ROLE?}
+      YHUB_TASK_CONCURRENCY: ${DOCS_YHUB_YHUB_TASK_CONCURRENCY?}
+      NODE_OPTIONS: ${DOCS_YHUB_NODE_OPTIONS?}
+      REDIS: ${DOCS_YHUB_REDIS?}
+      REDIS_PREFIX: ${DOCS_YHUB_REDIS_PREFIX?}
+      POSTGRES: ${DOCS_YHUB_POSTGRES?}
+      COLLABORATION_BACKEND_BASE_URL: ${DOCS_YHUB_COLLABORATION_BACKEND_BASE_URL?}
+      COLLABORATION_SERVER_ORIGIN: ${DOCS_YHUB_COLLABORATION_SERVER_ORIGIN?}
+      Y_PROVIDER_API_KEY: ${DOCS_YHUB_Y_PROVIDER_API_KEY?}
+      YHUB_JWT_PRIVATE_KEY_FILE: ${DOCS_YHUB_YHUB_JWT_PRIVATE_KEY_FILE?}
+      YHUB_S3_PERSISTENCE: ${DOCS_YHUB_YHUB_S3_PERSISTENCE?}
+      YHUB_S3_ENDPOINT_URL: ${DOCS_YHUB_YHUB_S3_ENDPOINT_URL?}
+      YHUB_S3_ACCESS_KEY_ID: ${DOCS_YHUB_YHUB_S3_ACCESS_KEY_ID?}
+      YHUB_S3_SECRET_ACCESS_KEY: ${DOCS_YHUB_YHUB_S3_SECRET_ACCESS_KEY?}
+      YHUB_S3_BUCKET_NAME: ${DOCS_YHUB_YHUB_S3_BUCKET_NAME?}
+      YHUB_S3_REGION_NAME: ${DOCS_YHUB_YHUB_S3_REGION_NAME?}
+      HOME: /tmp
+    command:
+    - yarn
+    - init-db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+  docs-yhub:
+    image: lasuite/impress-yhub:v6.0.4
+    user: '1000'
+    environment:
+      PORT: ${DOCS_YHUB_PORT?}
+      YHUB_ROLE: ${DOCS_YHUB_YHUB_ROLE?}
+      YHUB_TASK_CONCURRENCY: ${DOCS_YHUB_YHUB_TASK_CONCURRENCY?}
+      NODE_OPTIONS: ${DOCS_YHUB_NODE_OPTIONS?}
+      REDIS: ${DOCS_YHUB_REDIS?}
+      REDIS_PREFIX: ${DOCS_YHUB_REDIS_PREFIX?}
+      POSTGRES: ${DOCS_YHUB_POSTGRES?}
+      COLLABORATION_BACKEND_BASE_URL: ${DOCS_YHUB_COLLABORATION_BACKEND_BASE_URL?}
+      COLLABORATION_SERVER_ORIGIN: ${DOCS_YHUB_COLLABORATION_SERVER_ORIGIN?}
+      Y_PROVIDER_API_KEY: ${DOCS_YHUB_Y_PROVIDER_API_KEY?}
+      YHUB_JWT_PRIVATE_KEY_FILE: ${DOCS_YHUB_YHUB_JWT_PRIVATE_KEY_FILE?}
+      YHUB_S3_PERSISTENCE: ${DOCS_YHUB_YHUB_S3_PERSISTENCE?}
+      YHUB_S3_ENDPOINT_URL: ${DOCS_YHUB_YHUB_S3_ENDPOINT_URL?}
+      YHUB_S3_ACCESS_KEY_ID: ${DOCS_YHUB_YHUB_S3_ACCESS_KEY_ID?}
+      YHUB_S3_SECRET_ACCESS_KEY: ${DOCS_YHUB_YHUB_S3_SECRET_ACCESS_KEY?}
+      YHUB_S3_BUCKET_NAME: ${DOCS_YHUB_YHUB_S3_BUCKET_NAME?}
+      YHUB_S3_REGION_NAME: ${DOCS_YHUB_YHUB_S3_REGION_NAME?}
+      HOME: /tmp
+    volumes:
+    - docs-jwt-yhub:/keys:ro
+    healthcheck:
+      test:
+      - CMD
+      - node
+      - -e
+      - fetch('http://localhost:3002/collaboration/ready/v1').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      docs-keys:
+        condition: service_completed_successfully
+      docs-yhub-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  docs-y-provider:
+    image: lasuite/impress-y-provider:v6.0.4
+    user: '1000'
+    environment:
+      PORT: ${DOCS_Y_PROVIDER_PORT?}
+      Y_PROVIDER_API_KEY: ${DOCS_Y_PROVIDER_Y_PROVIDER_API_KEY?}
+      COLLABORATION_SERVER_ORIGIN: ${DOCS_Y_PROVIDER_COLLABORATION_SERVER_ORIGIN?}
+      COLLABORATION_BACKEND_BASE_URL: ${DOCS_Y_PROVIDER_COLLABORATION_BACKEND_BASE_URL?}
+      COLLABORATION_LOGGING: ${DOCS_Y_PROVIDER_COLLABORATION_LOGGING?}
+      NODE_OPTIONS: ${DOCS_Y_PROVIDER_NODE_OPTIONS?}
+      HOME: /tmp
+    restart: unless-stopped
+  docs-frontend:
+    image: lasuite/impress-frontend:v6.0.4
+    user: '101'
+    entrypoint:
+    - /docker-entrypoint.sh
+    command:
+    - nginx
+    - -g
+    - daemon off;
+    environment:
+      BACKEND_HOST: docs-backend
+      FRONTEND_HOST: 127.0.0.1
+      YHUB_HOST: docs-yhub
+      S3_HOST: s3:9000
+      BUCKET_NAME: docs-media-storage
+    volumes:
+    - ./stack/docs/default.conf.template:/etc/nginx/templates/docs.conf.template:ro
+    depends_on:
+      docs-backend:
+        condition: service_healthy
+      docs-yhub:
+        condition: service_healthy
+      docs-y-provider:
+        condition: service_started
+    restart: unless-stopped
+  grist:
+    image: gristlabs/grist:1.7.22
+    volumes:
+    - grist-persist:/persist
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - node -e "fetch('http://localhost:8484/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    environment:
+      APP_HOME_URL: ${GRIST_APP_HOME_URL?}
+      GRIST_SESSION_SECRET: ${GRIST_GRIST_SESSION_SECRET?}
+      GRIST_SINGLE_ORG: ${GRIST_GRIST_SINGLE_ORG?}
+      GRIST_ORG_IN_PATH: ${GRIST_GRIST_ORG_IN_PATH?}
+      GRIST_DEFAULT_EMAIL: ${GRIST_GRIST_DEFAULT_EMAIL?}
+      GRIST_ADMIN_EMAIL: ${GRIST_GRIST_ADMIN_EMAIL?}
+      GRIST_IN_SERVICE: ${GRIST_GRIST_IN_SERVICE?}
+      GRIST_FORCE_LOGIN: ${GRIST_GRIST_FORCE_LOGIN?}
+      GRIST_ANON_PLAYGROUND: ${GRIST_GRIST_ANON_PLAYGROUND?}
+      GRIST_TELEMETRY_LEVEL: ${GRIST_GRIST_TELEMETRY_LEVEL?}
+      GRIST_DEFAULT_LOCALE: ${GRIST_GRIST_DEFAULT_LOCALE?}
+      GRIST_WIDGET_LIST_URL: ${GRIST_GRIST_WIDGET_LIST_URL?}
+      GRIST_OIDC_SP_HOST: ${GRIST_GRIST_OIDC_SP_HOST?}
+      GRIST_OIDC_IDP_ISSUER: ${GRIST_GRIST_OIDC_IDP_ISSUER?}
+      GRIST_OIDC_IDP_CLIENT_ID: ${GRIST_GRIST_OIDC_IDP_CLIENT_ID?}
+      GRIST_OIDC_IDP_CLIENT_SECRET: ${GRIST_GRIST_OIDC_IDP_CLIENT_SECRET?}
+      GRIST_OIDC_IDP_SCOPES: ${GRIST_GRIST_OIDC_IDP_SCOPES?}
+      TYPEORM_TYPE: ${GRIST_TYPEORM_TYPE?}
+      TYPEORM_HOST: ${GRIST_TYPEORM_HOST?}
+      TYPEORM_PORT: ${GRIST_TYPEORM_PORT?}
+      TYPEORM_DATABASE: ${GRIST_TYPEORM_DATABASE?}
+      TYPEORM_USERNAME: ${GRIST_TYPEORM_USERNAME?}
+      TYPEORM_PASSWORD: ${GRIST_TYPEORM_PASSWORD?}
+      REDIS_URL: ${GRIST_REDIS_URL?}
+  drive-migrate:
+    image: lasuite/drive-backend:v0.26.0
+    configs:
+    - source: drive-settings-http
+      target: /app/drive/settings_http.py
+    command:
+    - sh
+    - -c
+    - 'python manage.py migrate --no-input && python manage.py createsuperuser --email "$$DJANGO_SUPERUSER_EMAIL" --password "$$DJANGO_SUPERUSER_PASSWORD"
+
+      '
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: 'no'
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DRIVE_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${DRIVE_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${DRIVE_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${DRIVE_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DRIVE_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${DRIVE_DJANGO_CORS_ALLOWED_ORIGINS?}
+      PYTHONPATH: ${DRIVE_PYTHONPATH?}
+      DJANGO_SUPERUSER_EMAIL: ${DRIVE_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${DRIVE_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${DRIVE_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${DRIVE_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${DRIVE_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${DRIVE_DB_HOST?}
+      DB_PORT: ${DRIVE_DB_PORT?}
+      DB_NAME: ${DRIVE_DB_NAME?}
+      DB_USER: ${DRIVE_DB_USER?}
+      DB_PASSWORD: ${DRIVE_DB_PASSWORD?}
+      REDIS_URL: ${DRIVE_REDIS_URL?}
+      DJANGO_CELERY_BROKER_URL: ${DRIVE_DJANGO_CELERY_BROKER_URL?}
+      DJANGO_EMAIL_HOST: ${DRIVE_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${DRIVE_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${DRIVE_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${DRIVE_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${DRIVE_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${DRIVE_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${DRIVE_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_URL_APP: ${DRIVE_DJANGO_EMAIL_URL_APP?}
+      AWS_S3_ENDPOINT_URL: ${DRIVE_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${DRIVE_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${DRIVE_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${DRIVE_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${DRIVE_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${DRIVE_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${DRIVE_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${DRIVE_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${DRIVE_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${DRIVE_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${DRIVE_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${DRIVE_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${DRIVE_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${DRIVE_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${DRIVE_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${DRIVE_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${DRIVE_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${DRIVE_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${DRIVE_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${DRIVE_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${DRIVE_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${DRIVE_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${DRIVE_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${DRIVE_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${DRIVE_FRONTEND_SILENT_LOGIN_ENABLED?}
+      FEATURES_INDEXED_SEARCH: ${DRIVE_FEATURES_INDEXED_SEARCH?}
+      MALWARE_DETECTION_BACKEND: ${DRIVE_MALWARE_DETECTION_BACKEND?}
+  drive-backend:
+    image: lasuite/drive-backend:v0.26.0
+    configs:
+    - source: drive-settings-http
+      target: /app/drive/settings_http.py
+    command:
+    - gunicorn
+    - -c
+    - /usr/local/etc/gunicorn/drive.py
+    - --workers
+    - '2'
+    - drive.wsgi:application
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      drive-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DRIVE_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${DRIVE_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${DRIVE_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${DRIVE_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DRIVE_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${DRIVE_DJANGO_CORS_ALLOWED_ORIGINS?}
+      PYTHONPATH: ${DRIVE_PYTHONPATH?}
+      DJANGO_SUPERUSER_EMAIL: ${DRIVE_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${DRIVE_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${DRIVE_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${DRIVE_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${DRIVE_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${DRIVE_DB_HOST?}
+      DB_PORT: ${DRIVE_DB_PORT?}
+      DB_NAME: ${DRIVE_DB_NAME?}
+      DB_USER: ${DRIVE_DB_USER?}
+      DB_PASSWORD: ${DRIVE_DB_PASSWORD?}
+      REDIS_URL: ${DRIVE_REDIS_URL?}
+      DJANGO_CELERY_BROKER_URL: ${DRIVE_DJANGO_CELERY_BROKER_URL?}
+      DJANGO_EMAIL_HOST: ${DRIVE_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${DRIVE_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${DRIVE_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${DRIVE_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${DRIVE_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${DRIVE_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${DRIVE_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_URL_APP: ${DRIVE_DJANGO_EMAIL_URL_APP?}
+      AWS_S3_ENDPOINT_URL: ${DRIVE_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${DRIVE_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${DRIVE_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${DRIVE_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${DRIVE_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${DRIVE_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${DRIVE_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${DRIVE_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${DRIVE_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${DRIVE_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${DRIVE_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${DRIVE_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${DRIVE_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${DRIVE_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${DRIVE_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${DRIVE_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${DRIVE_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${DRIVE_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${DRIVE_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${DRIVE_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${DRIVE_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${DRIVE_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${DRIVE_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${DRIVE_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${DRIVE_FRONTEND_SILENT_LOGIN_ENABLED?}
+      FEATURES_INDEXED_SEARCH: ${DRIVE_FEATURES_INDEXED_SEARCH?}
+      MALWARE_DETECTION_BACKEND: ${DRIVE_MALWARE_DETECTION_BACKEND?}
+  drive-celery:
+    image: lasuite/drive-backend:v0.26.0
+    configs:
+    - source: drive-settings-http
+      target: /app/drive/settings_http.py
+    command:
+    - celery
+    - -A
+    - drive.celery_app
+    - worker
+    - -l
+    - INFO
+    - -n
+    - drive@%h
+    - --concurrency=1
+    depends_on:
+      drive-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DRIVE_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${DRIVE_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${DRIVE_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${DRIVE_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DRIVE_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${DRIVE_DJANGO_CORS_ALLOWED_ORIGINS?}
+      PYTHONPATH: ${DRIVE_PYTHONPATH?}
+      DJANGO_SUPERUSER_EMAIL: ${DRIVE_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${DRIVE_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${DRIVE_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${DRIVE_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${DRIVE_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${DRIVE_DB_HOST?}
+      DB_PORT: ${DRIVE_DB_PORT?}
+      DB_NAME: ${DRIVE_DB_NAME?}
+      DB_USER: ${DRIVE_DB_USER?}
+      DB_PASSWORD: ${DRIVE_DB_PASSWORD?}
+      REDIS_URL: ${DRIVE_REDIS_URL?}
+      DJANGO_CELERY_BROKER_URL: ${DRIVE_DJANGO_CELERY_BROKER_URL?}
+      DJANGO_EMAIL_HOST: ${DRIVE_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${DRIVE_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${DRIVE_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${DRIVE_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${DRIVE_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${DRIVE_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${DRIVE_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_URL_APP: ${DRIVE_DJANGO_EMAIL_URL_APP?}
+      AWS_S3_ENDPOINT_URL: ${DRIVE_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${DRIVE_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${DRIVE_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${DRIVE_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${DRIVE_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${DRIVE_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${DRIVE_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${DRIVE_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${DRIVE_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${DRIVE_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${DRIVE_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${DRIVE_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${DRIVE_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${DRIVE_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${DRIVE_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${DRIVE_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${DRIVE_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${DRIVE_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${DRIVE_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${DRIVE_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${DRIVE_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${DRIVE_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${DRIVE_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${DRIVE_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${DRIVE_FRONTEND_SILENT_LOGIN_ENABLED?}
+      FEATURES_INDEXED_SEARCH: ${DRIVE_FEATURES_INDEXED_SEARCH?}
+      MALWARE_DETECTION_BACKEND: ${DRIVE_MALWARE_DETECTION_BACKEND?}
+  drive-frontend:
+    image: lasuite/drive-frontend:v0.26.0
+    user: '101'
+    entrypoint:
+    - /docker-entrypoint.sh
+    command:
+    - nginx
+    - -g
+    - daemon off;
+    environment:
+      BACKEND_HOST: drive-backend
+      FRONTEND_HOST: 127.0.0.1
+      S3_HOST: s3:9000
+      BUCKET_NAME: drive-media-storage
+    volumes:
+    - ./stack/drive/default.conf.template:/etc/nginx/templates/drive.conf.template:ro
+    depends_on:
+      drive-backend:
+        condition: service_healthy
+    restart: unless-stopped
+  transfers-migrate:
+    image: ghcr.io/suitenumerique/transfers-backend:0.5.2
+    configs:
+    - source: transfers-settings-http
+      target: /app/transfers/settings_http.py
+    command:
+    - python
+    - manage.py
+    - shell
+    - -c
+    - 'from django.core.management import call_command
+
+      call_command("migrate", interactive=False)
+
+      call_command("createsuperuser", email="admin@startkit.localhost", password="admin")
+
+      '
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    restart: 'no'
+    environment:
+      DJANGO_SETTINGS_MODULE: ${TRANSFERS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${TRANSFERS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${TRANSFERS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${TRANSFERS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${TRANSFERS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${TRANSFERS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${TRANSFERS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${TRANSFERS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${TRANSFERS_DB_HOST?}
+      DB_PORT: ${TRANSFERS_DB_PORT?}
+      DB_NAME: ${TRANSFERS_DB_NAME?}
+      DB_USER: ${TRANSFERS_DB_USER?}
+      DB_PASSWORD: ${TRANSFERS_DB_PASSWORD?}
+      REDIS_URL: ${TRANSFERS_REDIS_URL?}
+      WORKER_BROKER_URL: ${TRANSFERS_WORKER_BROKER_URL?}
+      DJANGO_EMAIL_HOST: ${TRANSFERS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${TRANSFERS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${TRANSFERS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${TRANSFERS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${TRANSFERS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_LOGO_IMG: ${TRANSFERS_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_FOOTER_LOGOS: ${TRANSFERS_DJANGO_EMAIL_FOOTER_LOGOS?}
+      AWS_S3_ENDPOINT_URL: ${TRANSFERS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${TRANSFERS_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${TRANSFERS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${TRANSFERS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${TRANSFERS_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${TRANSFERS_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${TRANSFERS_AWS_STORAGE_BUCKET_NAME?}
+      TRANSFER_MAX_FILE_SIZE: ${TRANSFERS_TRANSFER_MAX_FILE_SIZE?}
+      TRANSFER_MAX_TOTAL_SIZE: ${TRANSFERS_TRANSFER_MAX_TOTAL_SIZE?}
+      TRANSFER_MAX_FILES_PER_TRANSFER: ${TRANSFERS_TRANSFER_MAX_FILES_PER_TRANSFER?}
+      TRANSFER_EXPIRY_CHOICES: ${TRANSFERS_TRANSFER_EXPIRY_CHOICES?}
+      TRANSFER_DEFAULT_EXPIRY_DAYS: ${TRANSFERS_TRANSFER_DEFAULT_EXPIRY_DAYS?}
+      TRANSFER_PURGE_DELAY_HOURS: ${TRANSFERS_TRANSFER_PURGE_DELAY_HOURS?}
+      TRANSFER_CONFIDENTIAL_ENABLED: ${TRANSFERS_TRANSFER_CONFIDENTIAL_ENABLED?}
+      OIDC_OP_JWKS_ENDPOINT: ${TRANSFERS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${TRANSFERS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${TRANSFERS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${TRANSFERS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${TRANSFERS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${TRANSFERS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${TRANSFERS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${TRANSFERS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${TRANSFERS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${TRANSFERS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_CREATE_USER: ${TRANSFERS_OIDC_CREATE_USER?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${TRANSFERS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${TRANSFERS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      OIDC_STORE_CLAIMS: ${TRANSFERS_OIDC_STORE_CLAIMS?}
+      LOGIN_REDIRECT_URL: ${TRANSFERS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${TRANSFERS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${TRANSFERS_LOGOUT_REDIRECT_URL?}
+      SCAN_ENABLED: ${TRANSFERS_SCAN_ENABLED?}
+      DRIVE_BASE_URL: ${TRANSFERS_DRIVE_BASE_URL?}
+      LAGAUFRE_WIDGET_URL: ${TRANSFERS_LAGAUFRE_WIDGET_URL?}
+      LAGAUFRE_API_URL: ${TRANSFERS_LAGAUFRE_API_URL?}
+      HELP_URL: ${TRANSFERS_HELP_URL?}
+      SUPPORT_URL: ${TRANSFERS_SUPPORT_URL?}
+      TERMS_URL: ${TRANSFERS_TERMS_URL?}
+  transfers-backend:
+    image: ghcr.io/suitenumerique/transfers-backend:0.5.2
+    configs:
+    - source: transfers-settings-http
+      target: /app/transfers/settings_http.py
+    command:
+    - gunicorn
+    - -c
+    - /app/gunicorn.conf.py
+    - --workers
+    - '2'
+    - transfers.wsgi:application
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://localhost:8000/__heartbeat__/', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      transfers-migrate:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${TRANSFERS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${TRANSFERS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${TRANSFERS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${TRANSFERS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${TRANSFERS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${TRANSFERS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${TRANSFERS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${TRANSFERS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${TRANSFERS_DB_HOST?}
+      DB_PORT: ${TRANSFERS_DB_PORT?}
+      DB_NAME: ${TRANSFERS_DB_NAME?}
+      DB_USER: ${TRANSFERS_DB_USER?}
+      DB_PASSWORD: ${TRANSFERS_DB_PASSWORD?}
+      REDIS_URL: ${TRANSFERS_REDIS_URL?}
+      WORKER_BROKER_URL: ${TRANSFERS_WORKER_BROKER_URL?}
+      DJANGO_EMAIL_HOST: ${TRANSFERS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${TRANSFERS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${TRANSFERS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${TRANSFERS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${TRANSFERS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_LOGO_IMG: ${TRANSFERS_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_FOOTER_LOGOS: ${TRANSFERS_DJANGO_EMAIL_FOOTER_LOGOS?}
+      AWS_S3_ENDPOINT_URL: ${TRANSFERS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${TRANSFERS_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${TRANSFERS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${TRANSFERS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${TRANSFERS_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${TRANSFERS_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${TRANSFERS_AWS_STORAGE_BUCKET_NAME?}
+      TRANSFER_MAX_FILE_SIZE: ${TRANSFERS_TRANSFER_MAX_FILE_SIZE?}
+      TRANSFER_MAX_TOTAL_SIZE: ${TRANSFERS_TRANSFER_MAX_TOTAL_SIZE?}
+      TRANSFER_MAX_FILES_PER_TRANSFER: ${TRANSFERS_TRANSFER_MAX_FILES_PER_TRANSFER?}
+      TRANSFER_EXPIRY_CHOICES: ${TRANSFERS_TRANSFER_EXPIRY_CHOICES?}
+      TRANSFER_DEFAULT_EXPIRY_DAYS: ${TRANSFERS_TRANSFER_DEFAULT_EXPIRY_DAYS?}
+      TRANSFER_PURGE_DELAY_HOURS: ${TRANSFERS_TRANSFER_PURGE_DELAY_HOURS?}
+      TRANSFER_CONFIDENTIAL_ENABLED: ${TRANSFERS_TRANSFER_CONFIDENTIAL_ENABLED?}
+      OIDC_OP_JWKS_ENDPOINT: ${TRANSFERS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${TRANSFERS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${TRANSFERS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${TRANSFERS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${TRANSFERS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${TRANSFERS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${TRANSFERS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${TRANSFERS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${TRANSFERS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${TRANSFERS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_CREATE_USER: ${TRANSFERS_OIDC_CREATE_USER?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${TRANSFERS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${TRANSFERS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      OIDC_STORE_CLAIMS: ${TRANSFERS_OIDC_STORE_CLAIMS?}
+      LOGIN_REDIRECT_URL: ${TRANSFERS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${TRANSFERS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${TRANSFERS_LOGOUT_REDIRECT_URL?}
+      SCAN_ENABLED: ${TRANSFERS_SCAN_ENABLED?}
+      DRIVE_BASE_URL: ${TRANSFERS_DRIVE_BASE_URL?}
+      LAGAUFRE_WIDGET_URL: ${TRANSFERS_LAGAUFRE_WIDGET_URL?}
+      LAGAUFRE_API_URL: ${TRANSFERS_LAGAUFRE_API_URL?}
+      HELP_URL: ${TRANSFERS_HELP_URL?}
+      SUPPORT_URL: ${TRANSFERS_SUPPORT_URL?}
+      TERMS_URL: ${TRANSFERS_TERMS_URL?}
+  transfers-worker:
+    image: ghcr.io/suitenumerique/transfers-backend:0.5.2
+    configs:
+    - source: transfers-settings-http
+      target: /app/transfers/settings_http.py
+    command:
+    - python
+    - worker.py
+    - --processes
+    - '1'
+    - --threads
+    - '1'
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - worker.py
+      - --ping
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      transfers-migrate:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${TRANSFERS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${TRANSFERS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${TRANSFERS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${TRANSFERS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${TRANSFERS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${TRANSFERS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${TRANSFERS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${TRANSFERS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${TRANSFERS_DB_HOST?}
+      DB_PORT: ${TRANSFERS_DB_PORT?}
+      DB_NAME: ${TRANSFERS_DB_NAME?}
+      DB_USER: ${TRANSFERS_DB_USER?}
+      DB_PASSWORD: ${TRANSFERS_DB_PASSWORD?}
+      REDIS_URL: ${TRANSFERS_REDIS_URL?}
+      WORKER_BROKER_URL: ${TRANSFERS_WORKER_BROKER_URL?}
+      DJANGO_EMAIL_HOST: ${TRANSFERS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${TRANSFERS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${TRANSFERS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${TRANSFERS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${TRANSFERS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_LOGO_IMG: ${TRANSFERS_DJANGO_EMAIL_LOGO_IMG?}
+      DJANGO_EMAIL_FOOTER_LOGOS: ${TRANSFERS_DJANGO_EMAIL_FOOTER_LOGOS?}
+      AWS_S3_ENDPOINT_URL: ${TRANSFERS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${TRANSFERS_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${TRANSFERS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${TRANSFERS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${TRANSFERS_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${TRANSFERS_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${TRANSFERS_AWS_STORAGE_BUCKET_NAME?}
+      TRANSFER_MAX_FILE_SIZE: ${TRANSFERS_TRANSFER_MAX_FILE_SIZE?}
+      TRANSFER_MAX_TOTAL_SIZE: ${TRANSFERS_TRANSFER_MAX_TOTAL_SIZE?}
+      TRANSFER_MAX_FILES_PER_TRANSFER: ${TRANSFERS_TRANSFER_MAX_FILES_PER_TRANSFER?}
+      TRANSFER_EXPIRY_CHOICES: ${TRANSFERS_TRANSFER_EXPIRY_CHOICES?}
+      TRANSFER_DEFAULT_EXPIRY_DAYS: ${TRANSFERS_TRANSFER_DEFAULT_EXPIRY_DAYS?}
+      TRANSFER_PURGE_DELAY_HOURS: ${TRANSFERS_TRANSFER_PURGE_DELAY_HOURS?}
+      TRANSFER_CONFIDENTIAL_ENABLED: ${TRANSFERS_TRANSFER_CONFIDENTIAL_ENABLED?}
+      OIDC_OP_JWKS_ENDPOINT: ${TRANSFERS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${TRANSFERS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${TRANSFERS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${TRANSFERS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${TRANSFERS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${TRANSFERS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${TRANSFERS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${TRANSFERS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${TRANSFERS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${TRANSFERS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_CREATE_USER: ${TRANSFERS_OIDC_CREATE_USER?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${TRANSFERS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${TRANSFERS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      OIDC_STORE_CLAIMS: ${TRANSFERS_OIDC_STORE_CLAIMS?}
+      LOGIN_REDIRECT_URL: ${TRANSFERS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${TRANSFERS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${TRANSFERS_LOGOUT_REDIRECT_URL?}
+      SCAN_ENABLED: ${TRANSFERS_SCAN_ENABLED?}
+      DRIVE_BASE_URL: ${TRANSFERS_DRIVE_BASE_URL?}
+      LAGAUFRE_WIDGET_URL: ${TRANSFERS_LAGAUFRE_WIDGET_URL?}
+      LAGAUFRE_API_URL: ${TRANSFERS_LAGAUFRE_API_URL?}
+      HELP_URL: ${TRANSFERS_HELP_URL?}
+      SUPPORT_URL: ${TRANSFERS_SUPPORT_URL?}
+      TERMS_URL: ${TRANSFERS_TERMS_URL?}
+  transfers-frontend:
+    image: ghcr.io/suitenumerique/transfers-frontend:0.5.2
+    environment:
+      TRANSFERS_FRONTEND_BACKEND_SERVER: transfers-backend:8000
+      TRANSFERS_FRONTEND_S3_ORIGIN: http://s3.localhost:8000
+    depends_on:
+      transfers-backend:
+        condition: service_healthy
+    restart: unless-stopped
+  ollama-relay:
+    image: alpine/socat:1.8.0.3
+    network_mode: host
+    command: TCP-LISTEN:11434,bind=172.17.0.1,fork,reuseaddr TCP:127.0.0.1:11434
+    restart: unless-stopped
+  conversations-migrate:
+    image: lasuite/conversations-backend:v0.0.28
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    volumes:
+    - ./stack/conversations/llm-configuration.json:/startkit/llm-configuration.json:ro
+    configs:
+    - source: conversations-settings-http
+      target: /app/conversations/settings_http.py
+    command:
+    - sh
+    - -c
+    - 'python manage.py migrate --no-input && python manage.py createsuperuser --email "$$DJANGO_SUPERUSER_EMAIL" --password "$$DJANGO_SUPERUSER_PASSWORD"
+
+      '
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: 'no'
+    environment:
+      DJANGO_SETTINGS_MODULE: ${CONVERSATIONS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${CONVERSATIONS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${CONVERSATIONS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${CONVERSATIONS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${CONVERSATIONS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${CONVERSATIONS_DJANGO_CORS_ALLOWED_ORIGINS?}
+      DJANGO_LANGUAGE_CODE: ${CONVERSATIONS_DJANGO_LANGUAGE_CODE?}
+      PYTHONPATH: ${CONVERSATIONS_PYTHONPATH?}
+      WEB_CONCURRENCY: ${CONVERSATIONS_WEB_CONCURRENCY?}
+      DJANGO_SUPERUSER_EMAIL: ${CONVERSATIONS_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${CONVERSATIONS_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${CONVERSATIONS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${CONVERSATIONS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${CONVERSATIONS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${CONVERSATIONS_DB_HOST?}
+      DB_PORT: ${CONVERSATIONS_DB_PORT?}
+      DB_NAME: ${CONVERSATIONS_DB_NAME?}
+      DB_USER: ${CONVERSATIONS_DB_USER?}
+      DB_PASSWORD: ${CONVERSATIONS_DB_PASSWORD?}
+      REDIS_URL: ${CONVERSATIONS_REDIS_URL?}
+      CELERY_BROKER_URL: ${CONVERSATIONS_CELERY_BROKER_URL?}
+      CELERY_RESULT_BACKEND: ${CONVERSATIONS_CELERY_RESULT_BACKEND?}
+      DJANGO_EMAIL_HOST: ${CONVERSATIONS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${CONVERSATIONS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${CONVERSATIONS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${CONVERSATIONS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${CONVERSATIONS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${CONVERSATIONS_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${CONVERSATIONS_DJANGO_EMAIL_LOGO_IMG?}
+      AWS_S3_ENDPOINT_URL: ${CONVERSATIONS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${CONVERSATIONS_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${CONVERSATIONS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${CONVERSATIONS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${CONVERSATIONS_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${CONVERSATIONS_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${CONVERSATIONS_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${CONVERSATIONS_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${CONVERSATIONS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${CONVERSATIONS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${CONVERSATIONS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${CONVERSATIONS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${CONVERSATIONS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${CONVERSATIONS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${CONVERSATIONS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${CONVERSATIONS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${CONVERSATIONS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${CONVERSATIONS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${CONVERSATIONS_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${CONVERSATIONS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${CONVERSATIONS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${CONVERSATIONS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${CONVERSATIONS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${CONVERSATIONS_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${CONVERSATIONS_FRONTEND_SILENT_LOGIN_ENABLED?}
+      LLM_CONFIGURATION_FILE_PATH: ${CONVERSATIONS_LLM_CONFIGURATION_FILE_PATH?}
+      OLLAMA_BASE_URL: ${CONVERSATIONS_OLLAMA_BASE_URL?}
+      OLLAMA_API_KEY: ${CONVERSATIONS_OLLAMA_API_KEY?}
+      LLM_DEFAULT_MODEL_HRID: ${CONVERSATIONS_LLM_DEFAULT_MODEL_HRID?}
+      LLM_SUMMARIZATION_MODEL_HRID: ${CONVERSATIONS_LLM_SUMMARIZATION_MODEL_HRID?}
+      DEFAULT_MAX_TOKEN_CONTEXT: ${CONVERSATIONS_DEFAULT_MAX_TOKEN_CONTEXT?}
+      DOCUMENT_CONTEXT_BUDGET_RATIO: ${CONVERSATIONS_DOCUMENT_CONTEXT_BUDGET_RATIO?}
+      DOCUMENT_CONTEXT_SECURITY_BUFFER_TOKENS: ${CONVERSATIONS_DOCUMENT_CONTEXT_SECURITY_BUFFER_TOKENS?}
+      CONVERSATION_SUMMARY_MAX_TOKENS: ${CONVERSATIONS_CONVERSATION_SUMMARY_MAX_TOKENS?}
+      CONVERSATION_SUMMARY_CONTEXT_MESSAGES: ${CONVERSATIONS_CONVERSATION_SUMMARY_CONTEXT_MESSAGES?}
+      LLM_MAX_OUTPUT_TOKENS_PER_MESSAGE: ${CONVERSATIONS_LLM_MAX_OUTPUT_TOKENS_PER_MESSAGE?}
+      API_CONVERSATION_CREATE_HOURLY_THROTTLE_RATE: ${CONVERSATIONS_API_CONVERSATION_CREATE_HOURLY_THROTTLE_RATE?}
+      API_CONVERSATION_CREATE_DAILY_THROTTLE_RATE: ${CONVERSATIONS_API_CONVERSATION_CREATE_DAILY_THROTTLE_RATE?}
+      FEATURE_FLAG_WEB_SEARCH: ${CONVERSATIONS_FEATURE_FLAG_WEB_SEARCH?}
+      FEATURE_FLAG_DOCUMENT_UPLOAD: ${CONVERSATIONS_FEATURE_FLAG_DOCUMENT_UPLOAD?}
+      FEATURE_FLAG_PRESENTATION_GENERATION: ${CONVERSATIONS_FEATURE_FLAG_PRESENTATION_GENERATION?}
+      FEATURE_FLAG_DATAGOUV_CONNECTOR: ${CONVERSATIONS_FEATURE_FLAG_DATAGOUV_CONNECTOR?}
+      DATAGOUV_CONNECTOR_URL: ${CONVERSATIONS_DATAGOUV_CONNECTOR_URL?}
+      MODEL_HEALTH_POLL_PROVIDER: ${CONVERSATIONS_MODEL_HEALTH_POLL_PROVIDER?}
+      DEINDEX_INACTIVE_COLLECTIONS_CRON: ${CONVERSATIONS_DEINDEX_INACTIVE_COLLECTIONS_CRON?}
+      OIDC_STORE_ACCESS_TOKEN: ${CONVERSATIONS_OIDC_STORE_ACCESS_TOKEN?}
+      OIDC_STORE_REFRESH_TOKEN: ${CONVERSATIONS_OIDC_STORE_REFRESH_TOKEN?}
+      LANGFUSE_ENABLED: ${CONVERSATIONS_LANGFUSE_ENABLED?}
+      PROMETHEUS_METRICS_ENABLED: ${CONVERSATIONS_PROMETHEUS_METRICS_ENABLED?}
+  conversations-backend:
+    image: lasuite/conversations-backend:v0.0.28
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    volumes:
+    - ./stack/conversations/llm-configuration.json:/startkit/llm-configuration.json:ro
+    configs:
+    - source: conversations-settings-http
+      target: /app/conversations/settings_http.py
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://localhost:8000/__lbheartbeat__', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      conversations-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      ollama-relay:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${CONVERSATIONS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${CONVERSATIONS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${CONVERSATIONS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${CONVERSATIONS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${CONVERSATIONS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${CONVERSATIONS_DJANGO_CORS_ALLOWED_ORIGINS?}
+      DJANGO_LANGUAGE_CODE: ${CONVERSATIONS_DJANGO_LANGUAGE_CODE?}
+      PYTHONPATH: ${CONVERSATIONS_PYTHONPATH?}
+      WEB_CONCURRENCY: ${CONVERSATIONS_WEB_CONCURRENCY?}
+      DJANGO_SUPERUSER_EMAIL: ${CONVERSATIONS_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${CONVERSATIONS_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${CONVERSATIONS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${CONVERSATIONS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${CONVERSATIONS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${CONVERSATIONS_DB_HOST?}
+      DB_PORT: ${CONVERSATIONS_DB_PORT?}
+      DB_NAME: ${CONVERSATIONS_DB_NAME?}
+      DB_USER: ${CONVERSATIONS_DB_USER?}
+      DB_PASSWORD: ${CONVERSATIONS_DB_PASSWORD?}
+      REDIS_URL: ${CONVERSATIONS_REDIS_URL?}
+      CELERY_BROKER_URL: ${CONVERSATIONS_CELERY_BROKER_URL?}
+      CELERY_RESULT_BACKEND: ${CONVERSATIONS_CELERY_RESULT_BACKEND?}
+      DJANGO_EMAIL_HOST: ${CONVERSATIONS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${CONVERSATIONS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${CONVERSATIONS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${CONVERSATIONS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${CONVERSATIONS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${CONVERSATIONS_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${CONVERSATIONS_DJANGO_EMAIL_LOGO_IMG?}
+      AWS_S3_ENDPOINT_URL: ${CONVERSATIONS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${CONVERSATIONS_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${CONVERSATIONS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${CONVERSATIONS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${CONVERSATIONS_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${CONVERSATIONS_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${CONVERSATIONS_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${CONVERSATIONS_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${CONVERSATIONS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${CONVERSATIONS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${CONVERSATIONS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${CONVERSATIONS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${CONVERSATIONS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${CONVERSATIONS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${CONVERSATIONS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${CONVERSATIONS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${CONVERSATIONS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${CONVERSATIONS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${CONVERSATIONS_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${CONVERSATIONS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${CONVERSATIONS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${CONVERSATIONS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${CONVERSATIONS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${CONVERSATIONS_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${CONVERSATIONS_FRONTEND_SILENT_LOGIN_ENABLED?}
+      LLM_CONFIGURATION_FILE_PATH: ${CONVERSATIONS_LLM_CONFIGURATION_FILE_PATH?}
+      OLLAMA_BASE_URL: ${CONVERSATIONS_OLLAMA_BASE_URL?}
+      OLLAMA_API_KEY: ${CONVERSATIONS_OLLAMA_API_KEY?}
+      LLM_DEFAULT_MODEL_HRID: ${CONVERSATIONS_LLM_DEFAULT_MODEL_HRID?}
+      LLM_SUMMARIZATION_MODEL_HRID: ${CONVERSATIONS_LLM_SUMMARIZATION_MODEL_HRID?}
+      DEFAULT_MAX_TOKEN_CONTEXT: ${CONVERSATIONS_DEFAULT_MAX_TOKEN_CONTEXT?}
+      DOCUMENT_CONTEXT_BUDGET_RATIO: ${CONVERSATIONS_DOCUMENT_CONTEXT_BUDGET_RATIO?}
+      DOCUMENT_CONTEXT_SECURITY_BUFFER_TOKENS: ${CONVERSATIONS_DOCUMENT_CONTEXT_SECURITY_BUFFER_TOKENS?}
+      CONVERSATION_SUMMARY_MAX_TOKENS: ${CONVERSATIONS_CONVERSATION_SUMMARY_MAX_TOKENS?}
+      CONVERSATION_SUMMARY_CONTEXT_MESSAGES: ${CONVERSATIONS_CONVERSATION_SUMMARY_CONTEXT_MESSAGES?}
+      LLM_MAX_OUTPUT_TOKENS_PER_MESSAGE: ${CONVERSATIONS_LLM_MAX_OUTPUT_TOKENS_PER_MESSAGE?}
+      API_CONVERSATION_CREATE_HOURLY_THROTTLE_RATE: ${CONVERSATIONS_API_CONVERSATION_CREATE_HOURLY_THROTTLE_RATE?}
+      API_CONVERSATION_CREATE_DAILY_THROTTLE_RATE: ${CONVERSATIONS_API_CONVERSATION_CREATE_DAILY_THROTTLE_RATE?}
+      FEATURE_FLAG_WEB_SEARCH: ${CONVERSATIONS_FEATURE_FLAG_WEB_SEARCH?}
+      FEATURE_FLAG_DOCUMENT_UPLOAD: ${CONVERSATIONS_FEATURE_FLAG_DOCUMENT_UPLOAD?}
+      FEATURE_FLAG_PRESENTATION_GENERATION: ${CONVERSATIONS_FEATURE_FLAG_PRESENTATION_GENERATION?}
+      FEATURE_FLAG_DATAGOUV_CONNECTOR: ${CONVERSATIONS_FEATURE_FLAG_DATAGOUV_CONNECTOR?}
+      DATAGOUV_CONNECTOR_URL: ${CONVERSATIONS_DATAGOUV_CONNECTOR_URL?}
+      MODEL_HEALTH_POLL_PROVIDER: ${CONVERSATIONS_MODEL_HEALTH_POLL_PROVIDER?}
+      DEINDEX_INACTIVE_COLLECTIONS_CRON: ${CONVERSATIONS_DEINDEX_INACTIVE_COLLECTIONS_CRON?}
+      OIDC_STORE_ACCESS_TOKEN: ${CONVERSATIONS_OIDC_STORE_ACCESS_TOKEN?}
+      OIDC_STORE_REFRESH_TOKEN: ${CONVERSATIONS_OIDC_STORE_REFRESH_TOKEN?}
+      LANGFUSE_ENABLED: ${CONVERSATIONS_LANGFUSE_ENABLED?}
+      PROMETHEUS_METRICS_ENABLED: ${CONVERSATIONS_PROMETHEUS_METRICS_ENABLED?}
+  conversations-worker:
+    image: lasuite/conversations-backend:v0.0.28
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    volumes:
+    - ./stack/conversations/llm-configuration.json:/startkit/llm-configuration.json:ro
+    configs:
+    - source: conversations-settings-http
+      target: /app/conversations/settings_http.py
+    command:
+    - celery
+    - -A
+    - conversations.celery_app
+    - worker
+    - -l
+    - INFO
+    - --concurrency=1
+    depends_on:
+      conversations-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      ollama-relay:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: ${CONVERSATIONS_DJANGO_SETTINGS_MODULE?}
+      DJANGO_CONFIGURATION: ${CONVERSATIONS_DJANGO_CONFIGURATION?}
+      DJANGO_SECRET_KEY: ${CONVERSATIONS_DJANGO_SECRET_KEY?}
+      DJANGO_ALLOWED_HOSTS: ${CONVERSATIONS_DJANGO_ALLOWED_HOSTS?}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${CONVERSATIONS_DJANGO_CSRF_TRUSTED_ORIGINS?}
+      DJANGO_CORS_ALLOWED_ORIGINS: ${CONVERSATIONS_DJANGO_CORS_ALLOWED_ORIGINS?}
+      DJANGO_LANGUAGE_CODE: ${CONVERSATIONS_DJANGO_LANGUAGE_CODE?}
+      PYTHONPATH: ${CONVERSATIONS_PYTHONPATH?}
+      WEB_CONCURRENCY: ${CONVERSATIONS_WEB_CONCURRENCY?}
+      DJANGO_SUPERUSER_EMAIL: ${CONVERSATIONS_DJANGO_SUPERUSER_EMAIL?}
+      DJANGO_SUPERUSER_PASSWORD: ${CONVERSATIONS_DJANGO_SUPERUSER_PASSWORD?}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ${CONVERSATIONS_LOGGING_LEVEL_HANDLERS_CONSOLE?}
+      LOGGING_LEVEL_LOGGERS_ROOT: ${CONVERSATIONS_LOGGING_LEVEL_LOGGERS_ROOT?}
+      LOGGING_LEVEL_LOGGERS_APP: ${CONVERSATIONS_LOGGING_LEVEL_LOGGERS_APP?}
+      DB_HOST: ${CONVERSATIONS_DB_HOST?}
+      DB_PORT: ${CONVERSATIONS_DB_PORT?}
+      DB_NAME: ${CONVERSATIONS_DB_NAME?}
+      DB_USER: ${CONVERSATIONS_DB_USER?}
+      DB_PASSWORD: ${CONVERSATIONS_DB_PASSWORD?}
+      REDIS_URL: ${CONVERSATIONS_REDIS_URL?}
+      CELERY_BROKER_URL: ${CONVERSATIONS_CELERY_BROKER_URL?}
+      CELERY_RESULT_BACKEND: ${CONVERSATIONS_CELERY_RESULT_BACKEND?}
+      DJANGO_EMAIL_HOST: ${CONVERSATIONS_DJANGO_EMAIL_HOST?}
+      DJANGO_EMAIL_PORT: ${CONVERSATIONS_DJANGO_EMAIL_PORT?}
+      DJANGO_EMAIL_USE_TLS: ${CONVERSATIONS_DJANGO_EMAIL_USE_TLS?}
+      DJANGO_EMAIL_USE_SSL: ${CONVERSATIONS_DJANGO_EMAIL_USE_SSL?}
+      DJANGO_EMAIL_FROM: ${CONVERSATIONS_DJANGO_EMAIL_FROM?}
+      DJANGO_EMAIL_BRAND_NAME: ${CONVERSATIONS_DJANGO_EMAIL_BRAND_NAME?}
+      DJANGO_EMAIL_LOGO_IMG: ${CONVERSATIONS_DJANGO_EMAIL_LOGO_IMG?}
+      AWS_S3_ENDPOINT_URL: ${CONVERSATIONS_AWS_S3_ENDPOINT_URL?}
+      AWS_S3_DOMAIN_REPLACE: ${CONVERSATIONS_AWS_S3_DOMAIN_REPLACE?}
+      AWS_S3_ACCESS_KEY_ID: ${CONVERSATIONS_AWS_S3_ACCESS_KEY_ID?}
+      AWS_S3_SECRET_ACCESS_KEY: ${CONVERSATIONS_AWS_S3_SECRET_ACCESS_KEY?}
+      AWS_S3_REGION_NAME: ${CONVERSATIONS_AWS_S3_REGION_NAME?}
+      AWS_S3_SIGNATURE_VERSION: ${CONVERSATIONS_AWS_S3_SIGNATURE_VERSION?}
+      AWS_STORAGE_BUCKET_NAME: ${CONVERSATIONS_AWS_STORAGE_BUCKET_NAME?}
+      MEDIA_BASE_URL: ${CONVERSATIONS_MEDIA_BASE_URL?}
+      OIDC_OP_JWKS_ENDPOINT: ${CONVERSATIONS_OIDC_OP_JWKS_ENDPOINT?}
+      OIDC_OP_AUTHORIZATION_ENDPOINT: ${CONVERSATIONS_OIDC_OP_AUTHORIZATION_ENDPOINT?}
+      OIDC_OP_TOKEN_ENDPOINT: ${CONVERSATIONS_OIDC_OP_TOKEN_ENDPOINT?}
+      OIDC_OP_USER_ENDPOINT: ${CONVERSATIONS_OIDC_OP_USER_ENDPOINT?}
+      OIDC_OP_LOGOUT_ENDPOINT: ${CONVERSATIONS_OIDC_OP_LOGOUT_ENDPOINT?}
+      OIDC_RP_CLIENT_ID: ${CONVERSATIONS_OIDC_RP_CLIENT_ID?}
+      OIDC_RP_CLIENT_SECRET: ${CONVERSATIONS_OIDC_RP_CLIENT_SECRET?}
+      OIDC_RP_SIGN_ALGO: ${CONVERSATIONS_OIDC_RP_SIGN_ALGO?}
+      OIDC_RP_SCOPES: ${CONVERSATIONS_OIDC_RP_SCOPES?}
+      OIDC_USERINFO_FULLNAME_FIELDS: ${CONVERSATIONS_OIDC_USERINFO_FULLNAME_FIELDS?}
+      OIDC_USERINFO_SHORTNAME_FIELD: ${CONVERSATIONS_OIDC_USERINFO_SHORTNAME_FIELD?}
+      OIDC_REDIRECT_ALLOWED_HOSTS: ${CONVERSATIONS_OIDC_REDIRECT_ALLOWED_HOSTS?}
+      OIDC_REDIRECT_REQUIRE_HTTPS: ${CONVERSATIONS_OIDC_REDIRECT_REQUIRE_HTTPS?}
+      LOGIN_REDIRECT_URL: ${CONVERSATIONS_LOGIN_REDIRECT_URL?}
+      LOGIN_REDIRECT_URL_FAILURE: ${CONVERSATIONS_LOGIN_REDIRECT_URL_FAILURE?}
+      LOGOUT_REDIRECT_URL: ${CONVERSATIONS_LOGOUT_REDIRECT_URL?}
+      FRONTEND_SILENT_LOGIN_ENABLED: ${CONVERSATIONS_FRONTEND_SILENT_LOGIN_ENABLED?}
+      LLM_CONFIGURATION_FILE_PATH: ${CONVERSATIONS_LLM_CONFIGURATION_FILE_PATH?}
+      OLLAMA_BASE_URL: ${CONVERSATIONS_OLLAMA_BASE_URL?}
+      OLLAMA_API_KEY: ${CONVERSATIONS_OLLAMA_API_KEY?}
+      LLM_DEFAULT_MODEL_HRID: ${CONVERSATIONS_LLM_DEFAULT_MODEL_HRID?}
+      LLM_SUMMARIZATION_MODEL_HRID: ${CONVERSATIONS_LLM_SUMMARIZATION_MODEL_HRID?}
+      DEFAULT_MAX_TOKEN_CONTEXT: ${CONVERSATIONS_DEFAULT_MAX_TOKEN_CONTEXT?}
+      DOCUMENT_CONTEXT_BUDGET_RATIO: ${CONVERSATIONS_DOCUMENT_CONTEXT_BUDGET_RATIO?}
+      DOCUMENT_CONTEXT_SECURITY_BUFFER_TOKENS: ${CONVERSATIONS_DOCUMENT_CONTEXT_SECURITY_BUFFER_TOKENS?}
+      CONVERSATION_SUMMARY_MAX_TOKENS: ${CONVERSATIONS_CONVERSATION_SUMMARY_MAX_TOKENS?}
+      CONVERSATION_SUMMARY_CONTEXT_MESSAGES: ${CONVERSATIONS_CONVERSATION_SUMMARY_CONTEXT_MESSAGES?}
+      LLM_MAX_OUTPUT_TOKENS_PER_MESSAGE: ${CONVERSATIONS_LLM_MAX_OUTPUT_TOKENS_PER_MESSAGE?}
+      API_CONVERSATION_CREATE_HOURLY_THROTTLE_RATE: ${CONVERSATIONS_API_CONVERSATION_CREATE_HOURLY_THROTTLE_RATE?}
+      API_CONVERSATION_CREATE_DAILY_THROTTLE_RATE: ${CONVERSATIONS_API_CONVERSATION_CREATE_DAILY_THROTTLE_RATE?}
+      FEATURE_FLAG_WEB_SEARCH: ${CONVERSATIONS_FEATURE_FLAG_WEB_SEARCH?}
+      FEATURE_FLAG_DOCUMENT_UPLOAD: ${CONVERSATIONS_FEATURE_FLAG_DOCUMENT_UPLOAD?}
+      FEATURE_FLAG_PRESENTATION_GENERATION: ${CONVERSATIONS_FEATURE_FLAG_PRESENTATION_GENERATION?}
+      FEATURE_FLAG_DATAGOUV_CONNECTOR: ${CONVERSATIONS_FEATURE_FLAG_DATAGOUV_CONNECTOR?}
+      DATAGOUV_CONNECTOR_URL: ${CONVERSATIONS_DATAGOUV_CONNECTOR_URL?}
+      MODEL_HEALTH_POLL_PROVIDER: ${CONVERSATIONS_MODEL_HEALTH_POLL_PROVIDER?}
+      DEINDEX_INACTIVE_COLLECTIONS_CRON: ${CONVERSATIONS_DEINDEX_INACTIVE_COLLECTIONS_CRON?}
+      OIDC_STORE_ACCESS_TOKEN: ${CONVERSATIONS_OIDC_STORE_ACCESS_TOKEN?}
+      OIDC_STORE_REFRESH_TOKEN: ${CONVERSATIONS_OIDC_STORE_REFRESH_TOKEN?}
+      LANGFUSE_ENABLED: ${CONVERSATIONS_LANGFUSE_ENABLED?}
+      PROMETHEUS_METRICS_ENABLED: ${CONVERSATIONS_PROMETHEUS_METRICS_ENABLED?}
+  conversations-frontend:
+    image: lasuite/conversations-frontend:v0.0.28
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      conversations-backend:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  postgres-data: null
+  s3-data: null
+  projects-user-avatars: null
+  projects-background-images: null
+  projects-attachments: null
+  messages-opensearch-data: null
+  docs-jwt-backend: null
+  docs-jwt-yhub: null
+  grist-persist: null
+configs:
+  meet-settings-http:
+    content: "\"\"\"Meet en HTTP simple pour la stack locale : Production sans HTTPS.\"\"\"\n\nfrom meet.settings import Production\n\n\nclass Http(Production):\n    \"\"\"Production settings served over\
+      \ plain HTTP (local stack only).\"\"\"\n\n    SECURE_SSL_REDIRECT = False\n    SECURE_PROXY_SSL_HEADER = None\n    SECURE_HSTS_SECONDS = 0\n    SECURE_HSTS_PRELOAD = False\n    SECURE_HSTS_INCLUDE_SUBDOMAINS\
+      \ = False\n    SESSION_COOKIE_SECURE = False\n    CSRF_COOKIE_SECURE = False\n"
+  meet-egress-config:
+    content: "logging:\n  level: info\napi_key: meet\napi_secret: meet-livekit-secret-bd33da5fe0a97f44111376a1d46b91a9\nws_url: ws://127.0.0.1:7880\ninsecure: true\nredis:\n  address: redis:6379\n  db:\
+      \ 3\n"
+  messages-settings-http:
+    content: "\"\"\"La Suite en local : configuration Production servie en HTTP simple.\"\"\"\n\nfrom messages.settings import Production\n\n\nclass Http(Production):\n    \"\"\"Production sans HTTPS (pas\
+      \ de redirection, de HSTS ni de cookies Secure).\"\"\"\n\n    SECURE_SSL_REDIRECT = False\n    SECURE_PROXY_SSL_HEADER = None\n    SECURE_HSTS_SECONDS = 0\n    SECURE_HSTS_PRELOAD = False\n    SECURE_HSTS_INCLUDE_SUBDOMAINS\
+      \ = False\n    SESSION_COOKIE_SECURE = False\n    CSRF_COOKIE_SECURE = False\n    SESSION_COOKIE_NAME = \"messages_sessionid\"\n"
+  messages-bootstrap:
+    content: "from core.models import Mailbox, MailDomain\n\ndomain, _ = MailDomain.objects.get_or_create(name=\"startkit.localhost\")\nif not domain.oidc_autojoin:\n    domain.oidc_autojoin = True\n  \
+      \  domain.save()\nfor local_part in (\"user1\", \"user2\", \"user3\"):\n    Mailbox.objects.get_or_create(local_part=local_part, domain=domain)\nprint(\"Domaine startkit.localhost (oidc_autojoin)\
+      \ et boîtes user1..3 prêts.\")\n"
+  docs-settings-http:
+    content: "\"\"\"Docs en HTTP simple pour la stack locale : Production sans HTTPS.\"\"\"\n\nfrom impress.settings import Production\n\n\nclass Http(Production):\n    \"\"\"Production settings served\
+      \ over plain HTTP (local stack only).\"\"\"\n\n    SECURE_SSL_REDIRECT = False\n    SECURE_PROXY_SSL_HEADER = None\n    SECURE_HSTS_SECONDS = 0\n    SECURE_HSTS_PRELOAD = False\n    SECURE_HSTS_INCLUDE_SUBDOMAINS\
+      \ = False\n    SESSION_COOKIE_SECURE = False\n    CSRF_COOKIE_SECURE = False\n    # Appels au y-provider en http://docs-y-provider:4444\n    CONVERSION_API_SECURE = False\n"
+  drive-settings-http:
+    content: "\"\"\"Drive en HTTP simple pour la stack locale : Production sans HTTPS.\"\"\"\n\nfrom drive.settings import Production\n\n\nclass Http(Production):\n    \"\"\"Production settings served over\
+      \ plain HTTP (local stack only).\"\"\"\n\n    SECURE_SSL_REDIRECT = False\n    SECURE_PROXY_SSL_HEADER = None\n    SECURE_HSTS_SECONDS = 0\n    SECURE_HSTS_PRELOAD = False\n    SECURE_HSTS_INCLUDE_SUBDOMAINS\
+      \ = False\n    SESSION_COOKIE_SECURE = False\n    CSRF_COOKIE_SECURE = False\n"
+  transfers-settings-http:
+    content: "\"\"\"La Suite en local : configuration Production servie en HTTP simple.\"\"\"\n\nfrom transfers.settings import Production\n\n\nclass Http(Production):\n    \"\"\"Production sans HTTPS (pas\
+      \ de redirection, de HSTS ni de cookies Secure).\"\"\"\n\n    SECURE_SSL_REDIRECT = False\n    SECURE_PROXY_SSL_HEADER = None\n    SECURE_HSTS_SECONDS = 0\n    SECURE_HSTS_PRELOAD = False\n    SECURE_HSTS_INCLUDE_SUBDOMAINS\
+      \ = False\n    SESSION_COOKIE_SECURE = False\n    CSRF_COOKIE_SECURE = False\n    SESSION_COOKIE_NAME = \"transfers_sessionid\"\n    # Le frontend lit le cookie « csrftoken » : ne pas renommer CSRF_COOKIE_NAME.\n\
+      \    # Schéma OpenAPI pour tester l'API à la main :\n    # /api/v1.0/swagger.json, /api/v1.0/swagger/ (UI chargée depuis un CDN).\n    USE_SWAGGER = True\n"
+  conversations-settings-http:
+    content: "\"\"\"Conversations en HTTP simple pour la stack locale : Production sans HTTPS.\"\"\"\n\nfrom conversations.settings import Production\n\n\nclass Http(Production):\n    \"\"\"Production settings\
+      \ served over plain HTTP (local stack only).\"\"\"\n\n    SECURE_SSL_REDIRECT = False\n    SECURE_PROXY_SSL_HEADER = None\n    SECURE_HSTS_SECONDS = 0\n    SECURE_HSTS_PRELOAD = False\n    SECURE_HSTS_INCLUDE_SUBDOMAINS\
+      \ = False\n    SESSION_COOKIE_SECURE = False\n    CSRF_COOKIE_SECURE = False\n    SESSION_COOKIE_NAME = \"conversations_sessionid\"\n"

@@ -301,6 +301,7 @@ Après un `down -v`, le prochain `up -d` recrée une installation neuve avec les
 
 ```
 compose.yml                  point d'entrée : inclut tous les fichiers ci-dessous
+coolify/                     déploiement Coolify (compose.flat.yml généré, prepare.sh, gabarits)
 nouveau-compte.sh            crée un compte Keycloak en une commande
 stack/infra.yml              proxy Caddy, Keycloak, PostgreSQL, Redis, S3, Mailpit
 stack/apps/<app>.yml         services de chaque application (images officielles)

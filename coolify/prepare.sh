@@ -6,7 +6,8 @@
 #
 # Entrée  : coolify/coolify.env (créé au premier lancement, secrets générés)
 # Sorties : stack/env/*.env, coolify/generated/{startkit-realm.json,livekit.yaml,
-#           init.sql,infra.env,s3.env,keycloak.env,proxy.env}
+#           init.sql,infra.env,s3.env,keycloak.env,proxy.env} et le bloc de
+#           variables à coller dans Coolify : coolify/generated/variables-coolify.env
 #
 # Ces fichiers ne sont pas versionnés. Relancer le script à chaque déploiement est
 # sans danger : les secrets déjà présents dans coolify.env sont réutilisés.
@@ -117,26 +118,55 @@ for tpl in templates/env/*.env; do
   render "$tpl" "$ROOT/stack/env/$name"
 done
 
+# Fichiers d'environnement de l'infrastructure : les gabarits font foi pour les
+# clés (coolify/flatten.py les lit pour peupler coolify/compose.flat.yml).
+for tpl in templates/infra-env/*.env; do
+  name=$(basename "$tpl")
+  render "$tpl" "generated/$name"
+done
+
 render templates/startkit-realm.json generated/startkit-realm.json
 render templates/livekit.yaml        generated/livekit.yaml
 render templates/init.sql            generated/init.sql
 
-# Fichiers d'environnement de l'infrastructure
-write_env() { # write_env <fichier> <lignes...>
-  local out="generated/$1"; shift
-  : > "$out"; chmod 600 "$out"
-  printf '%s\n' "$@" >> "$out"
-}
-write_env proxy.env    "DOMAIN=$DOMAIN"
-write_env infra.env    "POSTGRES_PASSWORD=$POSTGRES_SUPERUSER_PASSWORD"
-write_env s3.env       "MINIO_ROOT_USER=$S3_ACCESS_KEY" "MINIO_ROOT_PASSWORD=$S3_SECRET_KEY"
-write_env keycloak.env \
-  "KC_DB_PASSWORD=$DB_PASSWORD_KEYCLOAK" \
-  "KC_BOOTSTRAP_ADMIN_USERNAME=admin" \
-  "KC_BOOTSTRAP_ADMIN_PASSWORD=$KEYCLOAK_ADMIN_PASSWORD" \
-  "KC_HOSTNAME=https://auth.$DOMAIN"
-
 chmod 600 "$ENV_FILE"
+
+# ------------------------------------- bloc de variables à coller dans Coolify
+#
+# Coolify n'a qu'un jeu de variables par ressource et écrase les `env_file:` des
+# services par un `.env` unique : les clés sont donc préfixées par application
+# (meet.env -> MEET_, docs-yhub.env -> DOCS_YHUB_, generated/proxy.env -> PROXY_).
+# Le préfixe doit rester identique à celui de coolify/flatten.py.
+prefix_of() { # prefix_of <chemin env> -> MEET_ / DOCS_YHUB_ / PROXY_
+  local base
+  base=$(basename "$1" .env)
+  printf '%s_' "$(printf '%s' "$base" | tr '[:lower:].-' '[:upper:]__')"
+}
+
+{
+  echo "# Variables d'environnement de la ressource Coolify StartKit."
+  echo "# À coller dans l'onglet « Environment Variables » de la ressource,"
+  echo "# puis à redéployer. Généré par bash coolify/prepare.sh."
+  echo
+  echo "# --- Applications (stack/env/)"
+  for f in "$ROOT"/stack/env/*.env; do
+    [ -f "$f" ] || continue
+    prefix=$(prefix_of "$f")
+    echo
+    echo "# $(basename "$f")"
+    grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$f" | sed "s/^/$prefix/"
+  done
+  echo
+  echo "# --- Infrastructure (coolify/generated/)"
+  for f in generated/proxy.env generated/infra.env generated/s3.env generated/keycloak.env; do
+    [ -f "$f" ] || continue
+    prefix=$(prefix_of "$f")
+    echo
+    echo "# $(basename "$f")"
+    grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$f" | sed "s/^/$prefix/"
+  done
+} > generated/variables-coolify.env
+chmod 600 generated/variables-coolify.env
 
 # ----------------------------------------------------------------- contrôle
 leftover=$(grep -rl '\.localhost' "$ROOT"/stack/env/*.env 2>/dev/null || true)
@@ -172,5 +202,6 @@ Comptes administrateurs
 EOF
 [ "$added" -gt 0 ] && cyan "" && cyan "$added secret(s) généré(s) et enregistré(s) dans coolify/$ENV_FILE."
 cyan ""
-cyan "Fichiers écrits : stack/env/ (10), coolify/generated/ (7)."
-cyan "Étape suivante : voir coolify/README.md (domaines Coolify + pare-feu)."
+cyan "Fichiers écrits : stack/env/ (10), coolify/generated/ (8)."
+cyan "Variables Coolify à coller : coolify/generated/variables-coolify.env"
+cyan "Étape suivante : voir coolify/README.md (variables Coolify + domaines)."

@@ -1,12 +1,24 @@
 # StartKit — déploiement distant via Coolify.
 #
-# Ce fichier est le point d'entrée à déclarer dans Coolify :
-#   Base Directory : /coolify
-#   Docker Compose Location : /compose.yml
+# Ce fichier est la SOURCE du déploiement, pas le fichier lu par Coolify :
+# Coolify ne résout pas `include:` et réécrit le fichier Compose avant de
+# construire, ce qui supprimait tous les services inclus. Le fichier réellement
+# déployé est donc `coolify/compose.flat.yml`, généré par :
+#
+#   python3 coolify/flatten.py
+#
+# Côté Coolify :
+#   Base Directory           : /
+#   Docker Compose Location  : /coolify/compose.flat.yml
+#
+# Après toute modification de ce fichier ou de stack/apps/*.yml, régénérer
+# compose.flat.yml et le committer (`python3 coolify/flatten.py --check` échoue
+# si le fichier est périmé).
 #
 # Avant le premier déploiement, `bash coolify/prepare.sh` doit avoir généré :
 #   - stack/env/*.env            (config des applications, domaines réels)
 #   - coolify/generated/*        (realm, livekit, init.sql, identifiants)
+#   - coolify/generated/variables-coolify.env (variables à coller dans Coolify)
 # Voir coolify/README.md.
 #
 # Différences avec le compose.yml racine (développement local) :
@@ -32,10 +44,9 @@ services:
   # sur Internet. 7881/tcp et 7882/udp doivent aussi être autorisés dans le
   # pare-feu du serveur.
   #
-  # Définition complète (et non un simple ajout de ports/volumes) : Coolify ne
-  # fusionne pas toujours le service redéfini avec celui de stack/apps/meet.yml,
-  # ce qui donnait « meet-livekit has neither an image nor a build context
-  # specified » au moment du build.
+  # Définition complète (et non un simple ajout de ports/volumes) : dans le
+  # fichier aplati, cette définition remplace celle de stack/apps/meet.yml, donc
+  # elle doit rester autonome (image, commande, volumes, dépendances).
   meet-livekit:
     image: livekit/livekit-server:v1.13.10
     command: ["--config", "/etc/livekit.yaml"]
