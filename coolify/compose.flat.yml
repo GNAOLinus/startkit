@@ -1242,7 +1242,6 @@ services:
       YHUB_HOST: docs-yhub
       S3_HOST: s3:9000
       BUCKET_NAME: docs-media-storage
-    volumes: []
     depends_on:
       docs-backend:
         condition: service_healthy
@@ -1554,7 +1553,6 @@ services:
       FRONTEND_HOST: 127.0.0.1
       S3_HOST: s3:9000
       BUCKET_NAME: drive-media-storage
-    volumes: []
     depends_on:
       drive-backend:
         condition: service_healthy
@@ -1860,7 +1858,6 @@ services:
     image: startkit/conversations-backend:coolify
     extra_hosts:
     - host.docker.internal:host-gateway
-    volumes: []
     configs:
     - source: conversations-settings-http
       target: /app/conversations/settings_http.py
@@ -1962,7 +1959,6 @@ services:
     image: startkit/conversations-backend:coolify
     extra_hosts:
     - host.docker.internal:host-gateway
-    volumes: []
     configs:
     - source: conversations-settings-http
       target: /app/conversations/settings_http.py
@@ -2076,7 +2072,6 @@ services:
     image: startkit/conversations-backend:coolify
     extra_hosts:
     - host.docker.internal:host-gateway
-    volumes: []
     configs:
     - source: conversations-settings-http
       target: /app/conversations/settings_http.py

@@ -298,6 +298,11 @@ def validate_file_mounts(flat: dict) -> None:
     """Prevent Coolify deployments from depending on repository bind mounts."""
     for service_name, service in flat.get("services", {}).items():
         volumes = service.get("volumes")
+        if volumes == []:
+            # Coolify's Compose validator rejects an empty volume array even
+            # though Docker Compose accepts it as an override that clears mounts.
+            service.pop("volumes")
+            continue
         if not isinstance(volumes, list):
             continue
 
