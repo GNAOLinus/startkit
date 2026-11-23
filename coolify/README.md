@@ -19,11 +19,12 @@ Le fonctionnement local (`docker compose up -d`) n'est pas modifié.
 | Serveur | 8 Go de RAM minimum (Postgres + Keycloak + 8 apps + LiveKit), 4 vCPU recommandés |
 | Domaine | `web.niyiexpertise.com` (ou un domaine dont tu contrôles le DNS) |
 | DNS | `*.web.niyiexpertise.com` → IP du serveur, ou un enregistrement par sous-domaine |
-| Ports | 80/443 (Coolify), **7881/tcp et 7882/udp** (média Visio), 8000 non exposé publiquement |
+| Ports | 80/443 (Coolify), **7881/tcp et 7882/udp** (média Visio), proxy 8000 interne |
 | Coolify | une instance fonctionnelle, avec accès au dépôt `startkit` |
 
-> Le port `8000` du service `proxy` ne doit **pas** être ouvert sur Internet : Coolify
-> route le trafic vers ce port en interne, c'est lui qui gère le TLS.
+> Le port `8000` du service `proxy` est uniquement exposé au réseau Docker : Coolify
+> route le trafic vers ce port en interne et gère le TLS. Aucun port hôte `8000` n'est
+> réservé, ce qui évite les conflits avec d'autres services du serveur.
 
 ---
 

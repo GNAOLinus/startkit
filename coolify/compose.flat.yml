@@ -50,8 +50,8 @@ services:
     build:
       context: ./stack
       dockerfile: caddy/Dockerfile.coolify
-    ports:
-    - 8000:8000
+    expose:
+    - '8000'
     environment:
       DOMAIN: ${DOMAIN:-web.niyiexpertise.com}
     networks:
