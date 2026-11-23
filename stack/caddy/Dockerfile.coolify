@@ -1,0 +1,5 @@
+FROM caddy:2.10-alpine
+
+COPY caddy/Caddyfile /etc/caddy/Caddyfile
+COPY caddy/apps/ /etc/caddy/apps/
+COPY portal/ /srv/portal/

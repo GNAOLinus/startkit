@@ -1,10 +1,10 @@
 # LiveKit (SFU WebRTC) pour Visio — configuration de DÉPLOIEMENT DISTANT.
-# Générée par coolify/prepare.sh depuis coolify/templates/livekit.yaml.
+# Rendu par le service config-init à partir des secrets générés par Coolify.
 #
 # Différences avec stack/meet/livekit.yaml (version locale) :
 #   - use_external_ip: true → LiveKit annonce l'IP publique du serveur comme
 #     candidat ICE (pas de node_ip=127.0.0.1, qui ne fonctionne qu'en local) ;
-#   - secret et api_key injectés depuis coolify/coolify.env.
+#   - secret et api_key injectés depuis les variables générées par Coolify.
 #
 # Prérequis réseau sur le serveur :
 #   - 7881/tcp et 7882/udp joignables depuis Internet (pare-feu + ports publiés

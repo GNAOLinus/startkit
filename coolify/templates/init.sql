@@ -1,6 +1,5 @@
 -- Bases et utilisateurs de la stack — version DÉPLOIEMENT DISTANT.
--- Générée par coolify/prepare.sh : les mots de passe viennent de coolify/coolify.env
--- et doivent correspondre aux variables DB_PASSWORD_* de coolify/templates/env/.
+-- Rendu par le service config-init à partir des secrets générés par Coolify.
 
 -- Une base et un utilisateur par service. Exécuté une seule fois,
 -- au premier démarrage du volume PostgreSQL de la stack.

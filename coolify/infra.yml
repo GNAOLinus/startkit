@@ -1,26 +1,61 @@
 # Infrastructure partagée — version déploiement distant (Coolify).
 #
 # Différences avec stack/infra.yml (version locale) :
-#   - tous les identifiants viennent de coolify/generated/*.env, générés par
-#     coolify/prepare.sh (aucune valeur secrète dans ce fichier) ;
-#   - Keycloak tourne en mode `start` (production) et non `start-dev` ;
-#   - le realm est importé depuis coolify/generated/startkit-realm.json ;
-#   - le schéma PostgreSQL est importé depuis coolify/generated/init.sql.
+#   - Coolify génère les secrets depuis ses variables SERVICE_PASSWORD_* ;
+#   - la configuration sensible est rendue au démarrage dans un volume Docker ;
+#   - Keycloak tourne en mode `start` (production) et non `start-dev`.
 #
 # Le port 8000 du proxy est celui que Coolify doit router (voir coolify/README.md).
 
 services:
+  # Prépare les fichiers dépendant des secrets avant de démarrer PostgreSQL,
+  # Keycloak et LiveKit. Les valeurs sont générées et conservées par Coolify.
+  config-init:
+    build:
+      context: ./coolify
+      dockerfile: Dockerfile.config-init
+    environment:
+      DOMAIN: ${DOMAIN:-web.niyiexpertise.com}
+      CLIENT_SECRET_CONVERSATIONS: ${SERVICE_PASSWORD_64_CLIENTSECRETCONVERSATIONS}
+      CLIENT_SECRET_DOCS: ${SERVICE_PASSWORD_64_CLIENTSECRETDOCS}
+      CLIENT_SECRET_DRIVE: ${SERVICE_PASSWORD_64_CLIENTSECRETDRIVE}
+      CLIENT_SECRET_GRIST: ${SERVICE_PASSWORD_64_CLIENTSECRETGRIST}
+      CLIENT_SECRET_MEET: ${SERVICE_PASSWORD_64_CLIENTSECRETMEET}
+      CLIENT_SECRET_MESSAGES: ${SERVICE_PASSWORD_64_CLIENTSECRETMESSAGES}
+      CLIENT_SECRET_PROJECTS: ${SERVICE_PASSWORD_64_CLIENTSECRETPROJECTS}
+      CLIENT_SECRET_TRANSFERS: ${SERVICE_PASSWORD_64_CLIENTSECRETTRANSFERS}
+      DB_PASSWORD_CONVERSATIONS: ${SERVICE_PASSWORD_64_DBPASSWORDCONVERSATIONS}
+      DB_PASSWORD_DOCS: ${SERVICE_PASSWORD_64_DBPASSWORDDOCS}
+      DB_PASSWORD_DRIVE: ${SERVICE_PASSWORD_64_DBPASSWORDDRIVE}
+      DB_PASSWORD_GRIST: ${SERVICE_PASSWORD_64_DBPASSWORDGRIST}
+      DB_PASSWORD_KEYCLOAK: ${SERVICE_PASSWORD_64_DBPASSWORDKEYCLOAK}
+      DB_PASSWORD_MEET: ${SERVICE_PASSWORD_64_DBPASSWORDMEET}
+      DB_PASSWORD_MESSAGES: ${SERVICE_PASSWORD_64_DBPASSWORDMESSAGES}
+      DB_PASSWORD_PROJECTS: ${SERVICE_PASSWORD_64_DBPASSWORDPROJECTS}
+      DB_PASSWORD_TRANSFERS: ${SERVICE_PASSWORD_64_DBPASSWORDTRANSFERS}
+      DB_PASSWORD_YHUB: ${SERVICE_PASSWORD_64_DBPASSWORDYHUB}
+      DEMO_PASSWORD_USER1: ${SERVICE_PASSWORD_64_DEMOPASSWORDUSER1}
+      DEMO_PASSWORD_USER2: ${SERVICE_PASSWORD_64_DEMOPASSWORDUSER2}
+      DEMO_PASSWORD_USER3: ${SERVICE_PASSWORD_64_DEMOPASSWORDUSER3}
+      KEYCLOAK_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
+      LIVEKIT_API_KEY: ${SERVICE_USER_LIVEKIT}
+      LIVEKIT_API_SECRET: ${SERVICE_PASSWORD_64_LIVEKITAPISECRET}
+    volumes:
+      - startkit-postgres-init:/postgres-init
+      - startkit-keycloak-import:/keycloak-import
+      - startkit-livekit-config:/livekit-config
+    restart: "no"
+
   # Point d'entrée unique. Caddy route par sous-domaine ; les alias réseau
   # gardent les mêmes URL internes qu'en local (.localhost).
   proxy:
-    image: caddy:2.10-alpine
+    build:
+      context: ./stack
+      dockerfile: caddy/Dockerfile.coolify
     ports:
       - "8000:8000"
-    env_file: ./generated/proxy.env
-    volumes:
-      - ../stack/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../stack/caddy/apps:/etc/caddy/apps:ro
-      - ../stack/portal:/srv/portal:ro
+    environment:
+      DOMAIN: ${DOMAIN:-web.niyiexpertise.com}
     networks:
       default:
         aliases:
@@ -42,10 +77,14 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    env_file: ./generated/infra.env
+    environment:
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_64_POSTGRESSUPERUSERPASSWORD}
     volumes:
-      - ./generated/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - startkit-postgres-init:/docker-entrypoint-initdb.d:ro
       - postgres-data:/var/lib/postgresql/data
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s
@@ -64,7 +103,9 @@ services:
 
   s3:
     image: pgsty/silo
-    env_file: ./generated/s3.env
+    environment:
+      MINIO_ROOT_USER: startkit
+      MINIO_ROOT_PASSWORD: ${SERVICE_PASSWORD_64_S3SECRETKEY}
     command: server --console-address :9001 /data
     volumes:
       - s3-data:/data
@@ -79,7 +120,9 @@ services:
   # `$$` est échappé pour que le shell du conteneur lise les variables d'env.
   s3-init:
     image: pgsty/mc
-    env_file: ./generated/s3.env
+    environment:
+      MINIO_ROOT_USER: startkit
+      MINIO_ROOT_PASSWORD: ${SERVICE_PASSWORD_64_S3SECRETKEY}
     depends_on:
       s3:
         condition: service_healthy
@@ -105,8 +148,11 @@ services:
     image: quay.io/keycloak/keycloak:26.4
     # `start` (et non `start-dev`) : mode production, pas de valeurs par défaut.
     command: ["start", "--import-realm", "--health-enabled=true"]
-    env_file: ./generated/keycloak.env
     environment:
+      KC_DB_PASSWORD: ${SERVICE_PASSWORD_64_DBPASSWORDKEYCLOAK}
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
+      KC_HOSTNAME: https://auth.${DOMAIN:-web.niyiexpertise.com}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
@@ -115,8 +161,10 @@ services:
       KC_HEALTH_ENABLED: "true"
       JAVA_OPTS_APPEND: -Xms256m -Xmx768m
     volumes:
-      - ./generated/startkit-realm.json:/opt/keycloak/data/import/startkit-realm.json:ro
+      - startkit-keycloak-import:/opt/keycloak/data/import:ro
     depends_on:
+      config-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     healthcheck:
@@ -136,5 +184,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  startkit-postgres-init:
+  startkit-keycloak-import:
+  startkit-livekit-config:
   postgres-data:
   s3-data:

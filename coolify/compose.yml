@@ -15,11 +15,8 @@
 # compose.flat.yml et le committer (`python3 coolify/flatten.py --check` échoue
 # si le fichier est périmé).
 #
-# Avant le premier déploiement, `bash coolify/prepare.sh` doit avoir généré :
-#   - stack/env/*.env            (config des applications, domaines réels)
-#   - coolify/generated/*        (realm, livekit, init.sql, identifiants)
-#   - coolify/generated/variables-coolify.env (variables à coller dans Coolify)
-# Voir coolify/README.md.
+# Les identifiants sont créés par les variables SERVICE_PASSWORD_* de Coolify ;
+# les fichiers sensibles sont rendus au démarrage par config-init.
 #
 # Différences avec le compose.yml racine (développement local) :
 #   - infrastructure dédiée à la production (coolify/infra.yml) ;
@@ -40,6 +37,41 @@ include:
   - ../stack/apps/ia.yml
 
 services:
+  docs-frontend:
+    image: startkit/docs-frontend:coolify
+    build:
+      context: ./stack
+      dockerfile: docs/Dockerfile.coolify
+    volumes: []
+
+  drive-frontend:
+    image: startkit/drive-frontend:coolify
+    build:
+      context: ./stack
+      dockerfile: drive/Dockerfile.coolify
+    volumes: []
+
+  conversations-migrate:
+    image: startkit/conversations-backend:coolify
+    build:
+      context: ./stack
+      dockerfile: conversations/Dockerfile.coolify
+    volumes: []
+
+  conversations-backend:
+    image: startkit/conversations-backend:coolify
+    build:
+      context: ./stack
+      dockerfile: conversations/Dockerfile.coolify
+    volumes: []
+
+  conversations-worker:
+    image: startkit/conversations-backend:coolify
+    build:
+      context: ./stack
+      dockerfile: conversations/Dockerfile.coolify
+    volumes: []
+
   # Média WebRTC de Visio : config générée (IP publique) et ports ouverts
   # sur Internet. 7881/tcp et 7882/udp doivent aussi être autorisés dans le
   # pare-feu du serveur.
@@ -49,13 +81,15 @@ services:
   # elle doit rester autonome (image, commande, volumes, dépendances).
   meet-livekit:
     image: livekit/livekit-server:v1.13.10
-    command: ["--config", "/etc/livekit.yaml"]
+    command: ["--config", "/etc/livekit/livekit.yaml"]
     volumes:
-      - ./generated/livekit.yaml:/etc/livekit.yaml:ro
+      - startkit-livekit-config:/etc/livekit:ro
     ports:
       - "7881:7881/tcp"
       - "7882:7882/udp"
     depends_on:
+      config-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped

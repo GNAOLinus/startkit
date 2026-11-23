@@ -1,0 +1,3 @@
+FROM lasuite/impress-frontend:v6.0.4
+
+COPY docs/default.conf.template /etc/nginx/templates/docs.conf.template

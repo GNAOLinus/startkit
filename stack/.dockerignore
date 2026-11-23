@@ -1,0 +1,11 @@
+**
+!caddy/
+!caddy/**
+!portal/
+!portal/**
+!docs/
+!docs/**
+!drive/
+!drive/**
+!conversations/
+!conversations/**

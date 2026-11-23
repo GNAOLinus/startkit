@@ -1,0 +1,3 @@
+FROM lasuite/conversations-backend:v0.0.28
+
+COPY conversations/llm-configuration.json /startkit/llm-configuration.json

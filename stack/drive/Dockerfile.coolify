@@ -1,0 +1,3 @@
+FROM lasuite/drive-frontend:v0.26.0
+
+COPY drive/default.conf.template /etc/nginx/templates/drive.conf.template

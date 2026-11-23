@@ -19,13 +19,9 @@ Ce qu'il fait en plus de résoudre les `include:`
 - Réécrit les chemins relatifs (`volumes`, `env_file`, `configs`, `secrets`)
   par rapport à la racine du dépôt, puisque la ressource Coolify utilise
   « Base Directory = / ».
-- Remplace chaque `env_file:` par des `environment:` qui référencent des
-  variables Coolify préfixées (`${MEET_DB_NAME?}`) : Coolify remplace les
-  `env_file:` des services par un unique `.env` commun à toute la ressource,
-  or les fichiers d'environnement de StartKit partagent des clés (`DB_NAME`,
-  `DJANGO_SECRET_KEY`, …) avec des valeurs différentes selon l'application.
-  Les valeurs sont à coller dans Coolify (voir coolify/README.md §4) ;
-  `coolify/prepare.sh` produit le bloc prêt à coller.
+- Remplace les `env_file:` avec les valeurs de leurs gabarits suivis par Git.
+  Coolify crée les secrets via ses variables `SERVICE_PASSWORD_*` : aucune
+  préparation SSH ou import manuel de variables n'est nécessaire.
 
 Usage :
     python3 coolify/flatten.py            # régénère coolify/compose.flat.yml
@@ -47,12 +43,9 @@ ROOT = Path(__file__).resolve().parent.parent
 ENTRY = ROOT / "coolify" / "compose.yml"
 OUTPUT = ROOT / "coolify" / "compose.flat.yml"
 
-# Répertoires des gabarits qui font foi pour les clés de chaque fichier d'env.
-# stack/env/<app>.env        <- coolify/templates/env/<app>.env
-# coolify/generated/<f>.env  <- coolify/templates/infra-env/<f>.env
+# Gabarit de configuration de chaque application.
 ENV_TEMPLATE_DIRS = {
     "stack/env": ROOT / "coolify" / "templates" / "env",
-    "coolify/generated": ROOT / "coolify" / "templates" / "infra-env",
 }
 
 KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
@@ -65,11 +58,9 @@ HEADER = """\
 #            Base Directory ............ /
 #            Docker Compose Location ... /coolify/compose.flat.yml
 #
-# Coolify ne résout pas `include:` et remplace les `env_file:` des services par
-# un `.env` commun : ce fichier est donc aplati et les `env_file:` y sont
-# convertis en `environment:` référençant les variables Coolify prefixées
-# (${MEET_DB_NAME?}, …). Le bloc de valeurs à coller dans Coolify est produit
-# par `bash coolify/prepare.sh` : coolify/generated/variables-coolify.env.
+# Coolify ne résout pas `include:` : ce fichier est aplati. Les configurations
+# non secrètes viennent des gabarits suivis par Git ; Coolify génère les secrets
+# via ses variables SERVICE_PASSWORD_*.
 """
 
 
@@ -114,10 +105,24 @@ def rebase_short_volume(volume: str, file_dir: Path) -> str:
     return f"{rebase(source, file_dir)}:{rest}"
 
 
-def ns_of(env_path: Path) -> str:
-    """Préfixe des variables Coolify : meet.env -> MEET_, docs-yhub.env -> DOCS_YHUB_."""
-    stem = env_path.name[: -len(".env")] if env_path.name.endswith(".env") else env_path.stem
-    return stem.upper().replace("-", "_").replace(".", "_") + "_"
+def coolify_value(value: str) -> str:
+    """Make a tracked env template value self-contained for Coolify Compose."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key == "DOMAIN":
+            return "${DOMAIN:-web.niyiexpertise.com}"
+        if key == "S3_ACCESS_KEY":
+            return "startkit"
+        if key == "LIVEKIT_API_KEY":
+            return "${SERVICE_USER_LIVEKIT}"
+        token = re.sub(r"[^A-Z0-9]", "", key)
+        return "${SERVICE_PASSWORD_64_%s}" % token
+
+    return re.sub(r"\$\{([A-Z0-9_]+)\}", replace, value)
 
 
 def template_for(env_path: Path) -> Path:
@@ -125,7 +130,7 @@ def template_for(env_path: Path) -> Path:
     try:
         relative = env_path.relative_to(ROOT)
     except ValueError:
-        fail(f"{env_path} est hors du dépôt : les env_file doivent vivre dans stack/env/ ou coolify/generated/.")
+        fail(f"{env_path} est hors du dépôt : les env_file doivent vivre dans stack/env/.")
     # Les deux premiers segments sont typiquement ("stack", "env") ou ("coolify", "generated").
     for prefix, directory in ENV_TEMPLATE_DIRS.items():
         if str(Path(*relative.parts[:2])).replace(os.sep, "/") == prefix:
@@ -136,7 +141,7 @@ def template_for(env_path: Path) -> Path:
                     "  Ajoute-le : c'est lui qui liste les variables exposées à Coolify."
                 )
             return template
-    fail(f"{rel(env_path)} doit être dans stack/env/ ou coolify/generated/.")
+    fail(f"{rel(env_path)} doit être dans stack/env/.")
     raise AssertionError
 
 
@@ -150,6 +155,19 @@ def env_keys(env_path: Path) -> list[str]:
     if not keys:
         fail(f"{rel(template_for(env_path))} ne déclare aucune clé KEY=VALUE.")
     return keys
+
+
+def env_values(env_path: Path) -> dict[str, str]:
+    """Read environment defaults from the tracked template for an env_file."""
+    values: dict[str, str] = {}
+    for line in template_for(env_path).read_text(encoding="utf-8").splitlines():
+        match = KEY_RE.match(line)
+        if match:
+            key, value = line.split("=", 1)
+            values[key] = coolify_value(value)
+    if not values:
+        fail(f"{rel(template_for(env_path))} ne déclare aucune clé KEY=VALUE.")
+    return values
 
 
 def as_env_paths(value) -> list:
@@ -211,12 +229,7 @@ def transform_service(name: str, service: dict, file_dir: Path, used: list[Path]
     for path in as_env_paths(env_files):
         env_path = Path(os.path.normpath(os.path.join(file_dir, path)))
         used.append(env_path)
-        prefix = ns_of(env_path)
-        for key in env_keys(env_path):
-            # `${VAR?}` (sans `:`) : la variable doit exister dans Coolify, mais
-            # une valeur vide reste légitime (`SUPPORT_URL=`, `OIDC_STORE_CLAIMS=`…).
-            # Avec `:?`, Compose refuserait ces variables volontairement vides.
-            references[key] = "${%s%s?}" % (prefix, key)
+        references.update(env_values(env_path))
 
     if references:
         # `environment:` prime sur `env_file:` en Compose : l'explicite passe en dernier.
@@ -281,6 +294,27 @@ def resolve(path: Path, seen: tuple[Path, ...], used: list[Path]) -> dict:
     return deep_merge(merged, transform(data, path.parent, used))
 
 
+def validate_file_mounts(flat: dict) -> None:
+    """Prevent Coolify deployments from depending on repository bind mounts."""
+    for service_name, service in flat.get("services", {}).items():
+        volumes = service.get("volumes")
+        if not isinstance(volumes, list):
+            continue
+
+        for volume in volumes:
+            if not isinstance(volume, str):
+                continue
+            source, separator, _target_and_mode = volume.partition(":")
+            if not separator or not source.startswith("./"):
+                continue
+            source_path = (ROOT / source[2:]).resolve()
+            if source_path.is_file():
+                fail(
+                    f"services.{service_name} monte le fichier du dépôt {rel(source_path)}. "
+                    "Intègre-le à l'image du service pour éviter Preserve repository."
+                )
+
+
 def render(flat: dict) -> str:
     """Ordonne les sections comme Compose et produit le YAML final."""
     order = ["name", "services", "volumes", "networks", "configs", "secrets"]
@@ -299,6 +333,7 @@ def main() -> int:
 
     used: list[Path] = []
     flat = resolve(ENTRY, (), used)
+    validate_file_mounts(flat)
     text = render(flat)
 
     if args.check:
@@ -317,9 +352,9 @@ def main() -> int:
     OUTPUT.write_text(text, encoding="utf-8")
     services = flat.get("services", {})
     env_files = sorted({rel(path) for path in used})
-    variables = len({(ns_of(p), k) for p in used for k in env_keys(p)})
+    variables = len({k for p in used for k in env_keys(p)})
     print(f"flatten.py: {rel(OUTPUT)} généré — {len(services)} services, "
-          f"{len(env_files)} fichiers d'env, {variables} variables Coolify.")
+          f"{len(env_files)} gabarits intégrés, {variables} clés d'environnement.")
     if env_files:
         print("  env_file -> environment : " + ", ".join(env_files))
     return 0
